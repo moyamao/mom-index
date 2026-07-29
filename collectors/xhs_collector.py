@@ -1,17 +1,38 @@
 """
-小红书数据采集器（rnote.dev API）
-需要配置 RNODE_API_KEY 环境变量或直接填入
+小红书数据采集器
+
+支持三种来源：
+1. Playwright 登录态抓取（优先，适合本地实跑）
+2. rnote.dev API
+3. 模拟数据（最后兜底）
 """
 import os
 import requests
 from datetime import datetime
 from typing import List, Dict, Optional
 
+from .xhs_playwright import collect_all as collect_all_playwright
+from runtime_config import ini_get
+
 # 配置: 在 https://rnote.dev/auth/register 注册后获取
 # 设置环境变量 RNODE_API_KEY 或直接填入
 API_KEY = os.environ.get("RNODE_API_KEY", "")
 API_BASE = "https://rnote.dev/api/v2"
-PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+OUTPUT_FILE = os.path.join(DATA_DIR, "xhs_posts.json")
+DEFAULT_SESSION_DIR = os.path.join(PROJECT_ROOT, ".xhs_session")
+
+
+def _build_proxies() -> Optional[Dict[str, str]]:
+    """按环境变量决定是否走代理，默认直连。"""
+    proxy = os.environ.get("MOM_INDEX_PROXY", "").strip()
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
+
+
+PROXY = _build_proxies()
 
 SEARCH_KEYWORDS = {
     # 用小白的语言去搜，才能找到小白
@@ -19,7 +40,37 @@ SEARCH_KEYWORDS = {
     "gold":       ["黄金怎么买", "买黄金亏了", "黄金新手", "黄金还能涨吗"],
     "cpo":        ["CPO是什么", "光模块还能涨吗", "通信ETF"],
     "semiconductor": ["芯片还能买吗", "半导体新手", "芯片ETF"],
+    "storage": [
+        "存储", "存储芯片", "海力士", "SK海力士", "HBM", "美光", "三星", "三星存储",
+        "长鑫存储", "兆易创新", "西部数据", "闪迪",
+    ],
 }
+
+
+def _session_dir() -> str:
+    override = os.environ.get("XHS_SESSION_DIR", "").strip()
+    if override:
+        return os.path.expanduser(override)
+    return DEFAULT_SESSION_DIR
+
+
+def _has_playwright_session() -> bool:
+    return os.path.isdir(_session_dir())
+
+
+def _xhs_source_mode() -> str:
+    return (
+        os.environ.get("XHS_SOURCE_MODE", "").strip().lower()
+        or ini_get("xiaohongshu", "source_mode", "auto").strip().lower()
+        or "auto"
+    )
+
+
+def _dump_posts(data: Dict[str, List[Dict]]) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        import json
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def search_notes(keyword: str, count: int = 20) -> List[Dict]:
     """搜索小红书笔记"""
@@ -82,6 +133,8 @@ def _parse_note(raw: Dict) -> Dict:
         "title": (raw.get("title") or raw.get("desc") or "")[:100],
         "content": raw.get("desc") or raw.get("content") or "",
         "platform": "xiaohongshu",
+        "source_mode": "rnote_api",
+        "is_mock": False,
         "author": user.get("nickname") or user.get("nick_name", "未知"),
         "author_followers": user.get("follower_count", 0),
         "likes": interact.get("liked_count", 0),
@@ -162,6 +215,16 @@ def _gen_sample_posts() -> Dict[str, List[Dict]]:
             {"title": "新手刚买了半导体ETF求带", "content": "今天第一天入市买了半导体ETF，什么都不懂，有没有一起交流的群？互相学习"},
             {"title": "AI概念涨疯了是不是该跑了", "content": "满仓半导体ETF一个月赚了15%，看到网上说现在是泡沫，是不是该止盈了？还是继续拿着？"},
         ],
+        "storage": [
+            {"title": "存储芯片还能买吗，感觉已经涨很多了", "content": "最近总看到大家说存储芯片景气反转，但我完全不懂周期股。现在追会不会站岗？"},
+            {"title": "海力士一直涨，我这种小白还能上车吗", "content": "看新闻都在讲HBM和海力士，感觉AI离不开存储。可是已经涨这么高了，我现在买是不是太晚？"},
+            {"title": "HBM到底是什么，为什么都在吹", "content": "纯小白一枚，最近刷到很多人讨论HBM和存储芯片，完全看不懂。这个方向可以买基金吗？"},
+            {"title": "存储这波是不是第二个CPO", "content": "朋友说现在最强主线不是光模块是存储，我有点心动想换仓。有没有懂的说说还能不能冲？"},
+            {"title": "海力士大涨带着A股存储起飞，明天追不追", "content": "今天看到海力士又创新高，A股存储也全线爆发，手痒想追。小白最怕一买就回调，怎么办？"},
+            {"title": "新手买存储芯片ETF还是半导体ETF", "content": "想押注AI带来的存储需求，但是不知道买细分ETF还是直接买半导体ETF更稳。求教。"},
+            {"title": "存储芯片是不是已经泡沫了", "content": "涨太猛了有点不敢碰，可看别人天天赚钱又难受。现在是不是鱼尾行情？"},
+            {"title": "海力士这么猛，美光是不是也能买", "content": "看韩股海力士一路疯涨，我就想跟着买点相关的。可我连存储逻辑都没搞懂，有点怕。"},
+        ],
     }
     result = {}
     for sector, posts in samples.items():
@@ -172,6 +235,8 @@ def _gen_sample_posts() -> Dict[str, List[Dict]]:
                 "title": p["title"],
                 "content": p["content"],
                 "platform": "xiaohongshu",
+                "source_mode": "sample_mock",
+                "is_mock": True,
                 "author": f"小红书用户_{sector}_{i}",
                 "author_followers": 0,
                 "likes": 0,
@@ -184,8 +249,10 @@ def _gen_sample_posts() -> Dict[str, List[Dict]]:
 
 
 def collect_all() -> Dict[str, List[Dict]]:
-    """采集所有板块的小红书数据。API不可用时使用模拟数据。"""
-    if API_KEY:
+    """采集所有板块的小红书数据。默认优先真实数据，最后才退回模拟数据。"""
+    mode = _xhs_source_mode()
+
+    def _collect_api() -> Dict[str, List[Dict]]:
         result = {}
         for sector_key, keywords in SEARCH_KEYWORDS.items():
             all_notes = []
@@ -195,18 +262,59 @@ def collect_all() -> Dict[str, List[Dict]]:
             seen = set()
             unique = []
             for n in all_notes:
-                if n["id"] not in seen:
-                    seen.add(n["id"])
-                    unique.append(n)
+                dedupe_key = n.get("id") or n.get("title")
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                unique.append(n)
             result[sector_key] = unique
             print(f"  [小红书-{sector_key}] 采集到 {len(unique)} 条")
         return result
-    else:
-        print("  ⚠️ 无 API Key，使用模拟小红书数据（26条）")
-        sample = _gen_sample_posts()
-        for sector, posts in sample.items():
-            print(f"  [小红书-模拟-{sector}] {len(posts)} 条")
-        return sample
+
+    strategies = {
+        "playwright": [("playwright", collect_all_playwright)],
+        "api": [("api", _collect_api)],
+        "mock": [("mock", _gen_sample_posts)],
+        "auto": [
+            *([("playwright", collect_all_playwright)] if _has_playwright_session() else []),
+            *([("api", _collect_api)] if API_KEY else []),
+            ("mock", _gen_sample_posts),
+        ],
+    }
+
+    last_error = None
+    selected = strategies.get(mode, strategies["auto"])
+
+    for source_name, fn in selected:
+        try:
+            data = fn()
+            total = sum(len(posts) for posts in data.values())
+            if total <= 0:
+                print(f"  ⚠️ 小红书 {source_name} 返回 0 条，继续尝试下一个来源")
+                continue
+
+            if source_name == "playwright":
+                for sector, posts in data.items():
+                    print(f"  [小红书-{sector}] 采集到 {len(posts)} 条")
+            elif source_name == "mock":
+                print("  ⚠️ 小红书使用模拟数据")
+                for sector, posts in data.items():
+                    print(f"  [小红书-模拟-{sector}] {len(posts)} 条")
+
+            _dump_posts(data)
+            return data
+        except Exception as e:
+            last_error = e
+            print(f"  ⚠️ 小红书 {source_name} 失败: {e}")
+
+    print("  ⚠️ 小红书真实来源不可用，使用模拟数据（兜底）")
+    sample = _gen_sample_posts()
+    for sector, posts in sample.items():
+        print(f"  [小红书-模拟-{sector}] {len(posts)} 条")
+    _dump_posts(sample)
+    if last_error:
+        print(f"  ⚠️ 最后一次真实来源错误: {last_error}")
+    return sample
 
 if __name__ == "__main__":
     if not API_KEY:

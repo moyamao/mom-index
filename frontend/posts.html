@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>宝妈指数 · 帖子明细</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+.header {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border-bottom: 1px solid #334155;
+  padding: 20px 24px;
+}
+.header h1 {
+  font-size: 28px;
+  margin-bottom: 4px;
+  color: #f8fafc;
+}
+.subtitle {
+  color: #94a3b8;
+  font-size: 14px;
+}
+.header-links {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.jump-link {
+  color: #cbd5e1;
+  text-decoration: none;
+  background: rgba(148,163,184,0.12);
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+.filters, .summary {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 18px;
+}
+.filters-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+.filter-item label {
+  display: block;
+  color: #94a3b8;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.filter-item select, .filter-item input {
+  width: 100%;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.summary-chip {
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  background: rgba(148,163,184,0.08);
+}
+.posts {
+  display: grid;
+  gap: 14px;
+}
+.post-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 14px;
+  padding: 18px;
+}
+.post-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.post-title {
+  color: #f8fafc;
+  text-decoration: none;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.post-title:hover { color: #7dd3fc; }
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.badge {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  border: 1px solid #334155;
+}
+.badge.platform { background: rgba(59,130,246,0.16); color: #bfdbfe; }
+.badge.sector { background: rgba(148,163,184,0.12); color: #cbd5e1; }
+.badge.level { background: rgba(34,197,94,0.16); color: #86efac; }
+.badge.intent-buy { background: rgba(34,197,94,0.14); color: #4ade80; }
+.badge.intent-sell { background: rgba(239,68,68,0.14); color: #f87171; }
+.badge.intent-neutral { background: rgba(148,163,184,0.14); color: #cbd5e1; }
+.score-box {
+  min-width: 150px;
+  text-align: right;
+}
+.score-main {
+  font-size: 30px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+.score-sub {
+  color: #94a3b8;
+  font-size: 12px;
+}
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.excerpt-note {
+  margin-top: 14px;
+  border-left: 3px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+  color: #bae6fd;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.meta-item {
+  background: rgba(15,23,42,0.42);
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px;
+}
+.meta-label {
+  color: #64748b;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.meta-value {
+  color: #e2e8f0;
+  font-size: 13px;
+  word-break: break-word;
+}
+.content {
+  margin-top: 14px;
+  color: #cbd5e1;
+  line-height: 1.7;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+.content-box {
+  margin-top: 14px;
+  background: rgba(15,23,42,0.28);
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 14px;
+}
+.content-preview {
+  color: #e2e8f0;
+  line-height: 1.8;
+  font-size: 15px;
+  white-space: pre-wrap;
+}
+.content-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #bae6fd;
+  text-decoration: none;
+  border: 1px solid #334155;
+  background: rgba(56,189,248,0.08);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 13px;
+}
+.fold {
+  margin-top: 12px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: rgba(15,23,42,0.26);
+  overflow: hidden;
+}
+.fold summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 14px;
+  color: #cbd5e1;
+  font-size: 13px;
+  user-select: none;
+}
+.fold summary::-webkit-details-marker {
+  display: none;
+}
+.fold-body {
+  padding: 0 14px 14px;
+}
+.section-title {
+  margin-top: 14px;
+  margin-bottom: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.signal-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.signal-chip {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #cbd5e1;
+  background: rgba(148,163,184,0.08);
+  border: 1px solid #334155;
+}
+.reasoning {
+  margin-top: 10px;
+  background: rgba(15,23,42,0.35);
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 12px;
+  color: #cbd5e1;
+  line-height: 1.7;
+  font-size: 14px;
+}
+.empty, .loading {
+  text-align: center;
+  color: #94a3b8;
+  padding: 36px 12px;
+}
+@media (max-width: 960px) {
+  .filters-grid, .meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .post-head {
+    flex-direction: column;
+  }
+  .score-box {
+    text-align: left;
+  }
+}
+@media (max-width: 640px) {
+  .filters-grid, .meta-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>帖子明细</h1>
+  <div class="subtitle">按平台查看原帖、分析标签、情绪、买卖意图与判定理由</div>
+  <div class="header-links">
+    <a class="jump-link" href="dashboard.html">返回总览</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="summary" id="summary">
+    <div class="loading">加载中...</div>
+  </div>
+
+  <div class="filters">
+    <div class="filters-grid">
+      <div class="filter-item">
+        <label>平台</label>
+        <select id="platform-filter"></select>
+      </div>
+      <div class="filter-item">
+        <label>板块</label>
+        <select id="sector-filter"></select>
+      </div>
+      <div class="filter-item">
+        <label>等级</label>
+        <select id="level-filter"></select>
+      </div>
+      <div class="filter-item">
+        <label>意图</label>
+        <select id="intent-filter"></select>
+      </div>
+      <div class="filter-item">
+        <label>搜索</label>
+        <input id="search-input" type="text" placeholder="标题 / 内容 / 作者 / 关键词">
+      </div>
+    </div>
+  </div>
+
+  <div class="posts" id="posts">
+    <div class="loading">加载中...</div>
+  </div>
+</div>
+
+<script>
+const PLATFORM_NAMES = {
+  guba: '股吧',
+  weibo: '微博',
+  xiaohongshu: '小红书',
+  xueqiu: '雪球',
+  unknown: '其他',
+};
+
+const SECTOR_NAMES = {
+  nasdaq: '纳斯达克',
+  gold: '黄金',
+  cpo: 'CPO通信',
+  semiconductor: '半导体',
+  storage: '存储',
+};
+
+const LEVEL_NAMES = ['纯小白', '偏小白', '中间派', '偏专业', '专业投资者', '资讯帖', '垃圾帖'];
+const INTENT_NAMES = {
+  all: '全部',
+  buy: '买入',
+  sell: '卖出',
+  neutral: '观望',
+};
+
+let allItems = [];
+
+function el(id) {
+  return document.getElementById(id);
+}
+
+function fmtSentiment(score) {
+  const n = Number(score || 0);
+  if (n >= 0.5) return `贪婪 ${n}`;
+  if (n <= -0.5) return `恐惧 ${n}`;
+  return `中性 ${n}`;
+}
+
+function intentBadge(intent) {
+  if (intent === 'buy') return 'intent-buy';
+  if (intent === 'sell') return 'intent-sell';
+  return 'intent-neutral';
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function normalizeCompact(text) {
+  return String(text || '').replace(/\s+/g, '').trim();
+}
+
+function isContentRedundant(item) {
+  const title = normalizeCompact(item.title);
+  const content = normalizeCompact(item.content);
+  if (!content) return true;
+  if (content === title) return true;
+  if (title && content.startsWith(title)) return true;
+  return false;
+}
+
+function renderContent(item) {
+  const content = String(item.content || '').trim();
+  const redundant = isContentRedundant(item);
+  const preview = content || item.title || '未抓到正文';
+  const noteHtml = item.content_note ? `<div class="excerpt-note">${escapeHtml(item.content_note)}</div>` : '';
+  const contentMeta = item.content_length ? `正文长度 ${item.content_length}` : '未抓到正文';
+  const linkHtml = item.url ? `<a class="link-button" href="${item.url}" target="_blank" rel="noopener noreferrer">查看原帖全文</a>` : '';
+
+  if (redundant) {
+    return `
+      ${noteHtml}
+      <div class="content-box">
+        <div class="content-preview">${escapeHtml(preview)}</div>
+        <div class="content-actions">
+          <span class="summary-chip">${escapeHtml(contentMeta)}</span>
+          ${linkHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    ${noteHtml}
+    <div class="content-box">
+      <div class="content-preview">${escapeHtml(preview)}</div>
+      <div class="content-actions">
+        <span class="summary-chip">${escapeHtml(contentMeta)}</span>
+        ${linkHtml}
+      </div>
+    </div>
+  `;
+}
+
+function buildSelectOptions(select, values, allLabel = '全部') {
+  select.innerHTML = [`<option value="all">${allLabel}</option>`]
+    .concat(values.map(value => `<option value="${value}">${value}</option>`))
+    .join('');
+}
+
+function renderSummary(items, counts) {
+  const chips = [
+    `<span class="summary-chip">总帖子 ${items.length}</span>`,
+    ...Object.entries(counts || {}).sort((a, b) => b[1] - a[1]).map(
+      ([platform, count]) => `<span class="summary-chip">${PLATFORM_NAMES[platform] || platform} ${count}</span>`
+    )
+  ];
+  el('summary').innerHTML = `<div class="summary-row">${chips.join('')}</div>`;
+}
+
+function currentFilters() {
+  return {
+    platform: el('platform-filter').value,
+    sector: el('sector-filter').value,
+    level: el('level-filter').value,
+    intent: el('intent-filter').value,
+    q: el('search-input').value.trim().toLowerCase(),
+  };
+}
+
+function filterItems(items) {
+  const f = currentFilters();
+  return items.filter(item => {
+    if (f.platform !== 'all' && item.platform !== f.platform) return false;
+    if (f.sector !== 'all' && item.sector !== f.sector) return false;
+    if (f.level !== 'all' && item.level !== f.level) return false;
+    if (f.intent !== 'all' && item.intent !== f.intent) return false;
+    if (f.q) {
+      const hay = [
+        item.title, item.content, item.author, item.keyword, item.reasoning,
+        ...(item.key_signals || []),
+      ].join(' ').toLowerCase();
+      if (!hay.includes(f.q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderPosts(items) {
+  const container = el('posts');
+  if (!items.length) {
+    container.innerHTML = '<div class="empty">当前筛选条件下没有帖子</div>';
+    return;
+  }
+
+  container.innerHTML = items.map(item => `
+    <article class="post-card">
+      <div class="post-head">
+        <div style="min-width:0;">
+          <a class="post-title" href="${item.url || '#'}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '无标题')}</a>
+          <div class="badges">
+            <span class="badge platform">${escapeHtml(PLATFORM_NAMES[item.platform] || item.platform)}</span>
+            <span class="badge sector">${escapeHtml(SECTOR_NAMES[item.sector] || item.sector)}</span>
+            <span class="badge level">${escapeHtml(item.level || '未判定')}</span>
+            <span class="badge ${intentBadge(item.intent)}">${escapeHtml(INTENT_NAMES[item.intent] || '观望')}</span>
+            ${item.keyword ? `<span class="badge sector">关键词: ${escapeHtml(item.keyword)}</span>` : ''}
+            ${item.is_mock ? `<span class="badge intent-sell">模拟数据</span>` : ''}
+          </div>
+        </div>
+        <div class="score-box">
+          <div class="score-main">${Number(item.newbie_score || 0).toFixed(1)}</div>
+          <div class="score-sub">小白分 · ${item.newbie_confidence || 'low'}</div>
+        </div>
+      </div>
+
+      <div class="meta-grid">
+        <div class="meta-item">
+          <div class="meta-label">作者</div>
+          <div class="meta-value">${escapeHtml(item.author || '未知')}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">发布时间</div>
+          <div class="meta-value">${escapeHtml(item.source_datetime || item.published_at || item.date || '未知')}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">情绪</div>
+          <div class="meta-value">${escapeHtml(fmtSentiment(item.sentiment_score))}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">意图强度</div>
+          <div class="meta-value">${Number(item.intent_strength || 0).toFixed(2)}</div>
+        </div>
+      </div>
+
+      ${renderContent(item)}
+
+      ${(item.key_signals || []).length ? `
+        <div class="section-title">关键命中信号</div>
+        <div class="signal-list">
+          ${(item.key_signals || []).map(signal => `<span class="signal-chip">${escapeHtml(signal)}</span>`).join('')}
+        </div>
+      ` : ''}
+
+      ${item.reasoning ? `
+        <div class="section-title">判定理由</div>
+        <details class="fold">
+          <summary>展开规则判定说明</summary>
+          <div class="fold-body">
+            <div class="reasoning">${escapeHtml(item.reasoning)}</div>
+          </div>
+        </details>
+      ` : ''}
+    </article>
+  `).join('');
+}
+
+function rerender() {
+  renderPosts(filterItems(allItems));
+}
+
+fetch('data/platform_posts.json')
+  .then(resp => resp.json())
+  .then(data => {
+    allItems = data.items || [];
+    renderSummary(allItems, data.platform_counts || {});
+
+    buildSelectOptions(el('platform-filter'), Object.keys(data.platform_counts || {}).map(
+      key => key
+    ).sort((a, b) => (data.platform_counts[b] || 0) - (data.platform_counts[a] || 0)), '全部平台');
+    buildSelectOptions(el('sector-filter'), Object.keys(SECTOR_NAMES), '全部板块');
+    buildSelectOptions(el('level-filter'), LEVEL_NAMES, '全部等级');
+    el('intent-filter').innerHTML = Object.entries(INTENT_NAMES).map(
+      ([value, label]) => `<option value="${value}">${label}</option>`
+    ).join('');
+
+    ['platform-filter', 'sector-filter', 'level-filter', 'intent-filter'].forEach(id => {
+      el(id).addEventListener('change', rerender);
+    });
+    el('search-input').addEventListener('input', rerender);
+
+    rerender();
+  })
+  .catch(err => {
+    el('summary').innerHTML = `<div class="empty">platform_posts.json 加载失败: ${err.message}</div>`;
+    el('posts').innerHTML = '<div class="empty">请先运行 pipeline.py 生成帖子明细数据</div>';
+  });
+</script>
+</body>
+</html>

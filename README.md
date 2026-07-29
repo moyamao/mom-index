@@ -59,6 +59,7 @@ mom-index/
 ├── collectors/
 │   ├── anti_detection.py        # 反检测核心：UA轮换+隐身+延迟
 │   ├── guba_collector.py        # 东方财富股吧采集（✅ 生产可用）
+│   ├── weibo_collector.py       # 微博公开搜索采集（🧪 实验性）
 │   ├── xhs_collector.py         # 小红书 rnote.dev API（⚠️ 需充值）
 │   └── xhs_playwright.py        # 小红书 Playwright 方案（⚠️ 需登录态）
 ├── analyzer/
@@ -90,14 +91,244 @@ cd frontend && python -m http.server 8765
 # http://localhost:8765/dashboard.html
 ```
 
+## 提交与部署建议
+
+- 不要提交 `conf/config.ini`、`.weibo_session/`、`.xhs_session/`、`.xueqiu_session/`
+- 仓库里提供了可分享模板：`conf/config.example.ini`
+- 部署到 macOS / Mac mini 后，复制一份本机配置：
+
+```bash
+cp conf/config.example.ini conf/config.ini
+```
+
+编辑好 MySQL / 邮件 / 各平台登录态后，再跑主流程。
+
+## macOS Launchd 定时运行
+
+仓库已提供独立的 `launchd` 任务：
+
+- `scripts/mom_index_job.sh`
+- `deploy/com.mhy.mom_index.plist`
+- `scripts/install_launchd.sh`
+
+默认每天 `19:20` 跑一次 `pipeline.py`，日志写到 `logs/`。
+
+安装：
+
+```bash
+chmod +x scripts/mom_index_job.sh scripts/install_launchd.sh
+./scripts/install_launchd.sh
+```
+
+检查：
+
+```bash
+launchctl list | grep mom_index
+```
+
+## 小红书 Playwright 本地试跑
+
+适合 `rnote.dev` 不方便充值、但你本机已经登录过小红书网页的场景。
+
+先安装依赖：
+
+```bash
+python3 -m pip install playwright
+python3 -m playwright install chromium
+```
+
+推荐先初始化一个项目自己的持久会话目录：
+
+```bash
+python3 scripts/setup_xhs_session.py
+```
+
+这一步会打开浏览器，请你手动登录小红书、完成可能出现的验证，然后回到终端按回车保存会话。
+
+如果你不想单独建会话，也可以回退到复用本机 Chrome profile。若默认 profile 不是 `Default`，先指定：
+
+```bash
+export XHS_CHROME_PROFILE_DIR='Profile 1'
+```
+
+单独测试一个关键词：
+
+```bash
+python3 scripts/test_xhs_playwright.py "纳指还能买吗" 8
+```
+
+常用环境变量：
+
+- `XHS_HEADLESS=1`：无头运行，默认是有头，方便先看登录和风控
+- `XHS_SESSION_DIR=.xhs_session`：指定项目专用的小红书持久会话目录
+- `XHS_CHROME_USER_DATA_DIR=...`：手动指定 Chrome 用户目录
+- `XHS_CHROME_PROFILE_DIR=Default`：指定 Chrome profile 名
+- `XHS_KEEP_TMP_PROFILE=1`：保留临时复制出来的 profile 便于排查
+- `XHS_RENDER_WAIT_SECONDS=6`：页面渲染慢时可适当加大等待秒数
+- `XHS_DEBUG_DIR=/tmp/xhs_debug`：保存搜索结果页的 HTML 和截图，方便判断是登录页还是验证码页
+
+如果直接访问 `search_result` 卡住，脚本现在会自动回退到“打开首页 -> 输入关键词 -> 回车搜索”的 UI 模式。
+
 ## 数据源
 
 | 数据源 | 状态 | 日采集量 | 说明 |
 |--------|------|----------|------|
 | 东方财富股吧 | ✅ 稳定 | ~307条 | 4个ETF吧，无需cookie，无风控 |
+| 雪球 | 🧪 需 Cookie | 视关键词而定 | 搜索结果页/接口字段偶尔会变，建议带登录 Cookie |
+| 微博公开搜索 | 🧪 实验性 | 未知 | 公开网页搜索结果，可能有频控/验证码 |
 | 小红书 (rnote.dev) | ⚠️ 需充值 | 0 | 免费额度仅够一轮 |
 | 小红书 (x-mcp) | ⚠️ 登录通/搜索风控 | 0 | 扩展已装，搜索被XHS风控 |
 | 小红书 (Playwright) | ⚠️ 需登录态 | 0 | 隐身脚本已就绪，缺登录cookie |
+| 微信群聊（本地导出） | ✅ 可选 | 视导出量 | 只读用户导出文件，不解密微信数据库；默认关闭 |
+
+## 微信群聊本地数据源
+
+出于稳定性和隐私考虑，本项目不会绕过微信本地数据库加密，而是读取你主动放入私密目录的聊天导出文件。支持 `.json`、`.jsonl`、`.csv` 和制表符分隔的 `.txt`；原始文件目录已加入 `.gitignore`，发送者在进入分析管线前会哈希脱敏，群名不会写入输出。
+
+在 `conf/config.ini` 增加：
+
+```ini
+[wechat]
+enabled = true
+export_dir = private/wechat_exports
+groups = 投资交流群, 宝妈理财群
+lookback_days = 7
+privacy_salt = 请改成一段仅保存在本机的随机字符串
+```
+
+也可用环境变量覆盖：`MOM_INDEX_ENABLE_WECHAT=1`、`WECHAT_EXPORT_DIR=...`、`WECHAT_GROUPS=群A,群B`、`WECHAT_LOOKBACK_DAYS=7`、`WECHAT_PRIVACY_SALT=...`。
+
+CSV/TXT 的首行字段可使用英文或中文别名：
+
+```csv
+group,sender,content,published_at,type
+投资交流群,张三,纳指还能上车吗,2026-07-14 10:30:00,text
+```
+
+JSON 可直接是消息数组，也可使用 `{"messages": [...]}`。单独验证导入结果：
+
+```bash
+python3 scripts/test_wechat_collector.py
+```
+
+只有命中现有五个板块关键词的文本消息会进入评价；图片、语音、视频、过期消息和群白名单之外的内容会被忽略。原始聊天文件不会复制到 `data/`、前端或 MySQL。
+
+## 微博实验性数据源
+
+默认关闭。启用后，主流程会额外抓取微博公开搜索结果页：
+
+```bash
+export MOM_INDEX_ENABLE_WEIBO=1
+python3 pipeline.py
+```
+
+抓取结果会额外落盘到 `data/weibo_posts.json`。
+
+说明：
+
+- 当前实现支持四条实验路径：`playwright`、`public_web`、`mobile_api`、`cn_cookie`
+- 默认 `WEIBO_SOURCE_MODE=auto`
+- 如果本地存在 `.weibo_session/` 会话目录，`auto` 会优先走 `playwright`
+- 没有浏览器会话时，才会依次回退到移动端接口、公开搜索页、`weibo.cn`
+- 微博目前最稳定的方案是 `playwright`
+- Playwright 结果会自动清洗 `...全文`、`展开/收起` 等尾部文案，并过滤明显非正文/低质量结果
+- 如果你有 `weibo.cn` 的登录 Cookie，可设置：
+
+```bash
+export WEIBO_SOURCE_MODE=cn_cookie
+export WEIBO_COOKIE='你的cookie'
+```
+
+- 如果想看每个关键词的原始返回，设置：
+
+```bash
+export WEIBO_DEBUG_DIR=/tmp/weibo_debug
+```
+
+如果你想走浏览器会话方案，再试这一套：
+
+```bash
+python3 scripts/setup_weibo_session.py
+python3 scripts/test_weibo_playwright.py "纳指还能买吗" 8
+```
+
+也可以强制主流程直接走 Playwright：
+
+```bash
+export MOM_INDEX_ENABLE_WEIBO=1
+export WEIBO_SOURCE_MODE=playwright
+python3 pipeline.py
+```
+
+半导体相关关键词已经补充了 `存储`、`海力士`，会一起进入微博/小红书检索。
+
+## 雪球数据源
+
+如果你已经在 `conf/config.ini` 里配了 `[xueqiu]` 的 `cookie`，主流程会自动启用雪球采集。
+
+也可以显式开启：
+
+```bash
+export MOM_INDEX_ENABLE_XUEQIU=1
+python3 pipeline.py
+```
+
+单独测试一个关键词：
+
+```bash
+python3 scripts/test_xueqiu_collector.py "海力士"
+```
+
+如果你想直接走浏览器页面抓取，而不是接口：
+
+```bash
+python3 scripts/setup_xueqiu_session.py
+export XUEQIU_SOURCE_MODE=playwright
+export XUEQIU_HEADLESS=0
+python3 scripts/test_xueqiu_collector.py "海力士"
+```
+
+可选环境变量：
+
+- `XUEQIU_COOKIE=...`：覆盖 `config.ini`
+- `XUEQIU_COUNT=10`：每页抓多少条
+- `XUEQIU_PAGES=2`：抓多少页
+- `XUEQIU_SOURCE_MODE=auto|api|playwright`：默认 `auto`
+- `XUEQIU_HEADLESS=0`：浏览器可见，便于排查
+- `XUEQIU_DEBUG_DIR=/tmp/xueqiu_debug`：保存接口原始返回，方便排查 Cookie 是否失效
+
+## MySQL 落库
+
+主流程现在支持可选写入本地 MySQL，不影响原有 `data/*.json` 和前端文件输出。
+
+默认会优先读取 `conf/config.ini` 里的 `[mysql]` 配置。
+
+推荐这样配置：
+
+```bash
+export MOM_INDEX_ENABLE_MYSQL=1
+export MOM_INDEX_DB_HOST=127.0.0.1
+export MOM_INDEX_DB_PORT=3306
+export MOM_INDEX_DB_USER=你的用户
+export MOM_INDEX_DB_PASSWORD='你的密码'
+export MOM_INDEX_DB_NAME=stock
+python3 pipeline.py
+```
+
+如果你已经在 `conf/config.ini` 里配好了数据库，通常只需要：
+
+```bash
+export MOM_INDEX_ENABLE_MYSQL=1
+python3 pipeline.py
+```
+
+会自动创建三张表：
+
+- `mom_index_runs`
+- `mom_index_posts`
+- `mom_index_analysis`
+
+如果 MySQL 配置不通，主流程会打印错误并跳过写库，不会影响本地 JSON 和前端看板。
 
 ## 分析方法
 

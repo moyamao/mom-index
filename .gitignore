@@ -30,3 +30,14 @@ desktop.ini
 
 # Chrome profiles (Playwright)
 *.pw_profile/
+.weibo_session/
+.xhs_session/
+.xueqiu_session/
+
+# 私密本地数据（微信群聊导出等，严禁提交）
+private/
+data/wechat_*.json
+
+# 本地配置/日志
+conf/config.ini
+logs/

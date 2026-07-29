@@ -9,7 +9,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(HERE, "data")
 FRONTEND_DATA_DIR = os.path.join(HERE, "frontend", "data")
-FILES = ["dashboard_data.json", "history.json", "xhs_posts.json"]
+FILES = ["dashboard_data.json", "history.json", "xhs_posts.json", "weibo_posts.json", "xueqiu_posts.json", "platform_posts.json"]
 
 def sync():
     if not os.path.isdir(DATA_DIR):

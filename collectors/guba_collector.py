@@ -6,6 +6,7 @@ import re
 import html as html_mod
 import requests
 import time
+import os
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -18,18 +19,47 @@ SECTORS = {
     "semiconductor": {"name": "半导体", "code": "of512480", "etf": "512480"},
 }
 
-PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+
+def _build_proxies() -> Optional[Dict[str, str]]:
+    """按环境变量决定是否走代理，默认直连。"""
+    proxy = os.environ.get("MOM_INDEX_PROXY", "").strip()
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
+
+
+PROXY = _build_proxies()
 
 _ad = get_anti_detection()
 
 
-def fetch_board(code: str) -> str:
+def _is_valid_board_html(html_text: str) -> bool:
+    if not html_text or len(html_text) < 2000:
+        return False
+    return any(marker in html_text for marker in ["股吧", "listarticle", "articleh", "l3 a3"])
+
+
+def fetch_board(code: str, retries: int = 3) -> str:
     """获取股吧页面HTML — 使用反检测请求头"""
     url = f"https://guba.eastmoney.com/list,{code}.html"
-    headers = _ad.get_common_headers(referer="https://guba.eastmoney.com")
-    resp = requests.get(url, headers=headers, proxies=PROXY, timeout=15)
-    resp.encoding = 'utf-8'
-    return resp.text
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            headers = _ad.get_common_headers(referer="https://guba.eastmoney.com")
+            resp = requests.get(url, headers=headers, proxies=PROXY, timeout=15)
+            resp.encoding = "utf-8"
+            resp.raise_for_status()
+            if not _is_valid_board_html(resp.text):
+                raise RuntimeError("股吧返回空页或异常页")
+            return resp.text
+        except Exception as e:
+            last_error = e
+            if attempt >= retries:
+                break
+            sleep_seconds = min(2 * attempt, 6)
+            print(f"    ⚠️ 股吧请求失败，{sleep_seconds}s 后重试 ({attempt}/{retries}): {e}")
+            time.sleep(sleep_seconds)
+    raise RuntimeError(str(last_error))
 
 
 def parse_posts(html_content: str) -> List[Dict]:

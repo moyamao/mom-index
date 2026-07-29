@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
+import re
 
 # ============================================================
 # 信号定义库
@@ -80,6 +81,71 @@ SELL_KEYWORDS = [
     "跌麻了", "跌惨了", "血亏", "亏死", "跌死", "跌崩",
 ]
 
+COMMON_SPAM_PATTERNS = [
+    "我是冲着金条来的",
+    "金条来的，你呢",
+    "领金条",
+    "签到",
+    "打卡",
+    "广告",
+]
+
+GOLD_ACTIVITY_SPAM_PATTERNS = [
+    "这是我的实盘战绩",
+    "欢迎前来pk",
+    "欢迎来交流",
+    "欢迎前来交流",
+    "我的持仓在此",
+    "晒晒我的etf持仓",
+    "报名参赛",
+    "红包拿",
+    "实盘赛里",
+]
+
+STORAGE_INFO_PATTERNS = [
+    "产业链梳理",
+    "全产业链",
+    "产业链图谱",
+    "图谱",
+    "供应商名单",
+    "名单",
+    "产能清单",
+    "工厂、产能",
+    "工厂产能",
+    "核心供应商",
+    "一家公司",
+    "产品介绍",
+    "概念股梳理",
+    "概念梳理",
+    "全景梳理",
+    "参数对比",
+    "规格对比",
+    "容量对比",
+    "选购指南",
+    "购买建议",
+    "晒单",
+    "开箱",
+    "作业",
+    "报价",
+    "价格",
+    "到手价",
+]
+
+STORAGE_COMMERCE_HINTS = [
+    "闪迪", "西部数据", "西数", "三星", "致态", "铠侠", "海康", "英睿达", "美光", "海力士",
+    "ssd", "固态", "硬盘", "内存条", "u盘", "tf卡", "micro sd", "sd卡", "颗粒", "缓存",
+]
+
+STORAGE_SPEC_HINTS = [
+    "dram", "ddr4", "ddr5", "hbm", "nand", "pcie", "nvme", "sata", "tlc", "qlc",
+    "1tb", "2tb", "4tb", "8gb", "16gb", "32gb", "64gb", "6400", "7200", "6000",
+]
+
+QUESTION_HINTS = [
+    "吗", "？", "?", "怎么", "为什么", "能不能", "要不要", "还能", "别慌", "怎么办",
+    "是不是", "值不值", "可不可以", "同学", "注意", "去留",
+]
+
 
 # ============================================================
 # 分析引擎
@@ -110,6 +176,53 @@ class AnalysisResult:
     
     # 用于前端展示
     key_signals: List[str] = field(default_factory=list)
+    source_date: str = ""
+    source_datetime: str = ""
+
+
+def _normalize_post_datetime(post: Dict) -> tuple[str, str]:
+    """尽量统一帖子时间，优先真实发布时间，回退到采集时间。"""
+    published_at = (post.get("published_at") or "").strip()
+    if published_at:
+        return published_at[:10], published_at
+
+    raw_date = (post.get("date") or "").strip()
+    now = datetime.now()
+
+    full_date_formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%m-%d %H:%M",
+        "%m-%d",
+    ]
+    for fmt in full_date_formats:
+        try:
+            parsed = datetime.strptime(raw_date, fmt)
+            if fmt.startswith("%m-%d"):
+                parsed = parsed.replace(year=now.year)
+                if parsed > now:
+                    parsed = parsed.replace(year=now.year - 1)
+            if fmt == "%Y-%m-%d":
+                return parsed.strftime("%Y-%m-%d"), parsed.strftime("%Y-%m-%d 00:00:00")
+            if fmt == "%m-%d":
+                return parsed.strftime("%Y-%m-%d"), parsed.strftime("%Y-%m-%d 00:00:00")
+            if "%H:%M" in fmt:
+                return parsed.strftime("%Y-%m-%d"), parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+
+    collected_at = (post.get("collected_at") or "").strip()
+    if collected_at:
+        try:
+            normalized = collected_at.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            return parsed.strftime("%Y-%m-%d"), parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+
+    fallback = now.strftime("%Y-%m-%d %H:%M:%S")
+    return fallback[:10], fallback
 
 
 def analyze_post(post: Dict, sector: str) -> AnalysisResult:
@@ -117,35 +230,51 @@ def analyze_post(post: Dict, sector: str) -> AnalysisResult:
     title = post.get("title", "")
     content = post.get("content", "")
     full_text = f"{title} {content}" if content else title
+    source_date, source_datetime = _normalize_post_datetime(post)
     
     # 0. 垃圾过滤
-    SPAM_PATTERNS = [
-        "我是冲着金条来的",
-        "金条来的，你呢",
-        "领金条",
-        "签到",
-        "打卡",
-        "广告",
-    ]
-    for spam in SPAM_PATTERNS:
+    spam_patterns = list(COMMON_SPAM_PATTERNS)
+    if sector == "gold":
+        spam_patterns.extend(GOLD_ACTIVITY_SPAM_PATTERNS)
+
+    for spam in spam_patterns:
         if spam in full_text:
             result = AnalysisResult(
                 post_id=post.get("id", ""),
-                title=title[:80],
+                title=title[:180],
                 platform=post.get("platform", "unknown"),
                 sector=sector,
                 newbie_score=0,
                 newbie_confidence="high",
                 level="垃圾帖",
                 reasoning=f"检测到垃圾/活动帖（命中: 「{spam}」），已过滤，不计入指数。",
+                source_date=source_date,
+                source_datetime=source_datetime,
             )
             return result
+
+    if _is_storage_info_post(title, content, sector):
+        result = AnalysisResult(
+            post_id=post.get("id", ""),
+            title=title[:180],
+            platform=post.get("platform", "unknown"),
+            sector=sector,
+            newbie_score=0,
+            newbie_confidence="high",
+            level="资讯帖",
+            reasoning="检测到偏产业梳理/名单/图谱类资讯帖，不计入宝妈指数。",
+            source_date=source_date,
+            source_datetime=source_datetime,
+        )
+        return result
     
     result = AnalysisResult(
         post_id=post.get("id", ""),
-        title=title[:80],
+        title=title[:180],
         platform=post.get("platform", "unknown"),
         sector=sector,
+        source_date=source_date,
+        source_datetime=source_datetime,
     )
     
     # 1. 逐信号匹配
@@ -255,7 +384,10 @@ def _generate_reasoning(
     parts = []
     
     # 开头
-    parts.append(f"帖子「{title[:40]}...」")
+    preview = (title or "").strip()
+    if len(preview) > 80:
+        preview = preview[:80] + "..."
+    parts.append(f"帖子「{preview}」")
     
     if not matched_newbie and not matched_pro:
         parts.append("未命中明确的信号词，内容较短或信息不足。")
@@ -296,6 +428,40 @@ def _analyze_sentiment(text: str) -> float:
     if total == 0:
         return 0.0
     return round((greed - fear) / total, 2)
+
+
+def _is_storage_info_post(title: str, content: str, sector: str) -> bool:
+    if sector != "storage":
+        return False
+
+    full_text = f"{title} {content}".strip()
+    if not full_text:
+        return False
+
+    if any(hint in full_text for hint in QUESTION_HINTS):
+        return False
+
+    hit_count = sum(1 for pattern in STORAGE_INFO_PATTERNS if pattern in full_text)
+    if hit_count >= 1:
+        return True
+
+    if any(token in full_text for token in ["HBM", "DDR", "DRAM", "NAND"]) and any(
+        token in full_text for token in ["图", "梳理", "名单", "关系"]
+    ):
+        return True
+
+    normalized = full_text.lower()
+    commerce_hit = any(token in normalized for token in STORAGE_COMMERCE_HINTS)
+    spec_hit = any(token in normalized for token in STORAGE_SPEC_HINTS)
+    has_price = bool(re.search(r"(?<!\d)(\d{2,5})(?:元|块|rmb)?(?!\d)", full_text))
+    has_capacity = bool(re.search(r"\b\d+\s?(tb|gb|mb)\b", normalized))
+    has_compare = any(token in full_text for token in ["推荐", "怎么选", "选哪个", "值得买", "性价比", "到手", "入手"])
+
+    # 过滤偏硬件导购/报价/参数贴，这类内容和“投资情绪”关联很弱。
+    if commerce_hit and ((has_price and (spec_hit or has_capacity)) or (has_compare and (spec_hit or has_capacity))):
+        return True
+
+    return False
 
 
 # ============================================================

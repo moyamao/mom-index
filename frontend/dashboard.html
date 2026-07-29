@@ -30,6 +30,25 @@ body {
   color: #94a3b8;
   font-size: 14px;
 }
+.header-links {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.jump-link {
+  color: #cbd5e1;
+  text-decoration: none;
+  background: rgba(148,163,184,0.12);
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.jump-link:hover {
+  background: rgba(148,163,184,0.2);
+}
 .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
 
 /* 指数卡片网格 */
@@ -52,6 +71,7 @@ body {
 .card.gold::before     { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
 .card.cpo::before      { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
 .card.semiconductor::before { background: linear-gradient(90deg, #10b981, #34d399); }
+.card.storage::before { background: linear-gradient(90deg, #f97316, #fb7185); }
 
 .card .sector-name { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
 .card .index-value { font-size: 48px; font-weight: 800; margin-bottom: 4px; }
@@ -70,6 +90,60 @@ body {
   font-size: 12px; color: #64748b;
 }
 .card .detail-row span { color: #cbd5e1; }
+.source-row {
+  margin-top: 10px;
+}
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.source-chip {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  background: rgba(148,163,184,0.08);
+}
+.platform-chip {
+  border-radius: 10px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  background: rgba(15,23,42,0.35);
+  min-width: 78px;
+}
+.platform-chip strong {
+  display: block;
+  font-size: 14px;
+  color: #e2e8f0;
+  margin-top: 2px;
+}
+.platform-breakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.card .delta-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.delta-chip {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-weight: 600;
+}
+.delta-chip.up { background: rgba(239,68,68,0.14); color: #fda4af; }
+.delta-chip.down { background: rgba(34,197,94,0.14); color: #86efac; }
+.delta-chip.flat { background: rgba(148,163,184,0.14); color: #cbd5e1; }
 
 /* 图表区域 */
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 24px; }
@@ -80,6 +154,189 @@ body {
   padding: 20px;
 }
 .chart-box h3 { font-size: 16px; margin-bottom: 16px; color: #e2e8f0; }
+
+.keyword-panel {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 24px;
+}
+.keyword-panel h3 { font-size: 16px; margin-bottom: 16px; color: #e2e8f0; }
+.keyword-tip {
+  color: #94a3b8;
+  font-size: 13px;
+  margin-top: -6px;
+  margin-bottom: 14px;
+}
+.keyword-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.keyword-tab {
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  background: rgba(148,163,184,0.08);
+  cursor: pointer;
+}
+.keyword-tab.active {
+  background: rgba(59,130,246,0.18);
+  border-color: rgba(96,165,250,0.55);
+  color: #eff6ff;
+}
+.keyword-stage {
+  background: #243145;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 14px;
+  overflow: hidden;
+}
+.keyword-sector-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+.keyword-sector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.keyword-toggle {
+  background: rgba(148,163,184,0.12);
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.keyword-toggle:hover {
+  background: rgba(148,163,184,0.2);
+}
+.keyword-sector-subtitle {
+  color: #94a3b8;
+  font-size: 12px;
+}
+.keyword-subtoolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 12px;
+  flex-wrap: wrap;
+}
+.keyword-mode-tabs {
+  display: flex;
+  gap: 8px;
+}
+.keyword-mode-tab {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  background: rgba(148,163,184,0.08);
+  cursor: pointer;
+}
+.keyword-mode-tab.active {
+  background: rgba(16,185,129,0.16);
+  border-color: rgba(52,211,153,0.5);
+  color: #ecfdf5;
+}
+.keyword-more {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  background: rgba(148,163,184,0.08);
+  cursor: pointer;
+}
+.keyword-mini-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.keyword-mini-card {
+  background: rgba(15,23,42,0.42);
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 96px;
+}
+.keyword-mini-info {
+  min-width: 0;
+}
+.keyword-mini-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.keyword-mini-name {
+  color: #e2e8f0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.keyword-mini-points {
+  color: #64748b;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.keyword-mini-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.keyword-mini-value {
+  color: #e2e8f0;
+  font-size: 28px;
+  font-weight: 800;
+}
+.keyword-mini-delta {
+  font-size: 14px;
+  font-weight: 700;
+}
+.keyword-mini-delta.up { color: #fda4af; }
+.keyword-mini-delta.down { color: #86efac; }
+.keyword-mini-delta.flat { color: #cbd5e1; }
+.keyword-mini-chart {
+  position: relative;
+  height: 84px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.keyword-mini-chart canvas {
+  display: block;
+  min-width: 100%;
+  height: 84px !important;
+}
+.keyword-mini-foot {
+  margin-top: 0;
+  color: #64748b;
+  font-size: 11px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
 
 /* Top 小白帖 */
 .top-posts {
@@ -117,6 +374,7 @@ body {
 .legend-dot.gold     { background: #fbbf24; }
 .legend-dot.cpo      { background: #a78bfa; }
 .legend-dot.semiconductor { background: #34d399; }
+.legend-dot.storage { background: #fb7185; }
 
 .footer { text-align: center; padding: 32px; color: #475569; font-size: 12px; }
 
@@ -126,6 +384,16 @@ body {
 @media (max-width: 600px) {
   .charts { grid-template-columns: 1fr; }
   .card .index-value { font-size: 36px; }
+  .keyword-toolbar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .keyword-mini-card {
+    grid-template-columns: 1fr;
+  }
+  .keyword-mini-chart {
+    height: 72px;
+  }
+  .keyword-mini-chart canvas {
+    height: 72px !important;
+  }
 }
 </style>
 </head>
@@ -135,10 +403,15 @@ body {
   <h1>👩‍👧 宝妈指数</h1>
   <div class="subtitle">当小白开始讨论投资，就是该警惕的时候</div>
   <div class="subtitle" id="update-time" style="margin-top:4px"></div>
+  <div class="header-links">
+    <a class="jump-link" href="#sector-charts">查看板块曲线</a>
+    <a class="jump-link" href="#keyword-panel">查看关键词日线 / 周线</a>
+    <a class="jump-link" href="posts.html">查看帖子明细</a>
+  </div>
 </div>
 
 <div class="container">
-  <!-- 四个板块指数卡片 -->
+  <!-- 各板块指数卡片 -->
   <div class="cards" id="cards"></div>
 
   <!-- 图例 -->
@@ -147,14 +420,23 @@ body {
     <div class="legend-item"><div class="legend-dot gold"></div>黄金</div>
     <div class="legend-item"><div class="legend-dot cpo"></div>CPO通信</div>
     <div class="legend-item"><div class="legend-dot semiconductor"></div>半导体</div>
+    <div class="legend-item"><div class="legend-dot storage"></div>存储</div>
   </div>
 
   <!-- 历史曲线 -->
-  <div class="charts">
+  <div class="charts" id="sector-charts">
     <div class="chart-box"><h3>📈 纳斯达克 — 宝妈指数走势</h3><canvas id="chart-nasdaq"></canvas></div>
     <div class="chart-box"><h3>🥇 黄金 — 宝妈指数走势</h3><canvas id="chart-gold"></canvas></div>
     <div class="chart-box"><h3>🔌 CPO通信 — 宝妈指数走势</h3><canvas id="chart-cpo"></canvas></div>
     <div class="chart-box"><h3>💾 半导体 — 宝妈指数走势</h3><canvas id="chart-semiconductor"></canvas></div>
+    <div class="chart-box"><h3>🧠 存储 — 宝妈指数走势</h3><canvas id="chart-storage"></canvas></div>
+  </div>
+
+  <div class="keyword-panel" id="keyword-panel">
+    <h3>🧭 关键词日线 / 周线</h3>
+    <div class="keyword-tip">顶部切换板块，下面只显示当前板块的叠加对比，避免页面拉成几屏。</div>
+    <div class="keyword-toolbar" id="keyword-toolbar"></div>
+    <div class="keyword-stage" id="keyword-stage"></div>
   </div>
 
   <!-- Top 小白帖 -->
@@ -175,15 +457,27 @@ const SECTOR_NAMES = {
   nasdaq: '纳斯达克',
   gold: '黄金', 
   cpo: 'CPO通信',
-  semiconductor: '半导体'
+  semiconductor: '半导体',
+  storage: '存储'
 };
 
 const SECTOR_COLORS = {
   nasdaq: '#06b6d4',
   gold: '#fbbf24',
   cpo: '#a78bfa',
-  semiconductor: '#34d399'
+  semiconductor: '#34d399',
+  storage: '#fb7185'
 };
+
+const PLATFORM_NAMES = {
+  guba: '股吧',
+  weibo: '微博',
+  xiaohongshu: '小红书',
+  xueqiu: '雪球',
+  unknown: '其他',
+};
+
+let keywordCharts = [];
 
 function getSignalClass(idx) {
   if (idx >= 75) return 'red';
@@ -204,6 +498,7 @@ function getEmoji(idx) {
 function renderCards(data) {
   const container = document.getElementById('cards');
   const latest = data.latest;
+  const latestChanges = data.latest_changes || {};
   if (!latest) {
     container.innerHTML = '<div class="loading">暂无数据，请先运行 pipeline.py</div>';
     return;
@@ -215,12 +510,41 @@ function renderCards(data) {
   container.innerHTML = Object.entries(latest.sectors).map(([key, sector]) => {
     const cls = getSignalClass(sector.index);
     const d = sector.details || {};
+    const change = latestChanges[key] || {};
+    const delta = change.delta;
+    const deltaClass = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+    const deltaLabel = delta == null ? '首个有效日期' : `${delta > 0 ? '+' : ''}${delta}`;
+    const sourceCounts = d.source_counts || {};
+    const platformBreakdown = d.platform_breakdown || {};
+    const divergence = d.platform_divergence ?? 0;
+    const totalSources = Object.values(sourceCounts).reduce((sum, value) => sum + value, 0);
+    const sourceChips = Object.entries(sourceCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([platform, count]) => {
+        const ratio = totalSources ? Math.round((count / totalSources) * 100) : 0;
+        return `<span class="source-chip">${PLATFORM_NAMES[platform] || platform} ${count} (${ratio}%)</span>`;
+      })
+      .join('');
+    const platformChips = Object.entries(platformBreakdown)
+      .sort((a, b) => (b[1]?.index || 0) - (a[1]?.index || 0))
+      .map(([platform, stats]) => `
+        <div class="platform-chip">
+          ${PLATFORM_NAMES[platform] || platform}
+          <strong>${stats.index ?? 0}</strong>
+          <span style="color:#64748b">${stats.newbie_posts || 0}/${stats.valid_posts || 0}</span>
+        </div>
+      `)
+      .join('');
     return `
       <div class="card ${key}">
         <div class="sector-name">${getEmoji(sector.index)} ${SECTOR_NAMES[key]}</div>
         <div class="index-value">${sector.index}</div>
         <div class="index-label">宝妈指数</div>
         <div class="signal ${cls}">${sector.interpretation}</div>
+        <div class="delta-row">
+          <div class="delta-chip ${deltaClass}">较前一日 ${deltaLabel}</div>
+          <div style="color:#64748b;">${change.points || 0} 个日期点</div>
+        </div>
         <!-- 买入/卖出子指数 -->
         <div style="margin-top:14px; display:flex; gap:8px;">
           <div style="flex:1; background:rgba(34,197,94,0.08); border-radius:8px; padding:8px; text-align:center;">
@@ -246,6 +570,14 @@ function renderCards(data) {
         <div class="detail-row">
           <span>买卖比</span><span style="color:${(d.buy_sell_ratio||0)>1.5?'#f87171':(d.buy_sell_ratio||0)>0.8?'#facc15':'#4ade80'}">${d.buy_sell_ratio||0}:1 ${(d.buy_sell_ratio||0)>1.5?'🔥追涨':(d.buy_sell_ratio||0)>0.8?'⚖️平衡':'🩸恐慌'}</span>
         </div>
+        <div class="detail-row">
+          <span>平台分歧</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
+        </div>
+        <div class="platform-breakdown">${platformChips || '<span class="source-chip">暂无平台拆分</span>'}</div>
+        <div class="detail-row source-row">
+          <span>来源分布</span><span>${totalSources} 条有效帖</span>
+        </div>
+        <div class="source-chips">${sourceChips || '<span class="source-chip">暂无</span>'}</div>
       </div>
     `;
   }).join('');
@@ -290,7 +622,13 @@ function renderCharts(data) {
             borderColor: '#334155',
             borderWidth: 1,
             callbacks: {
-              label: ctx => `宝妈指数: ${ctx.parsed.y}`
+              label: ctx => `宝妈指数: ${ctx.parsed.y}`,
+              afterLabel: ctx => {
+                const prev = ctx.dataIndex > 0 ? records[ctx.dataIndex - 1] : null;
+                if (!prev) return '首个有效日期';
+                const delta = (ctx.parsed.y - prev.index).toFixed(1);
+                return `较前一日: ${delta > 0 ? '+' : ''}${delta}`;
+              }
             }
           }
         },
@@ -354,12 +692,405 @@ function renderTopPosts(data) {
   `).join('');
 }
 
+function buildKeywordChart(canvasId, color, records, labelKey) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return null;
+  const ctx = canvas.getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: records.map(r => (r[labelKey] || '').slice(5)),
+      datasets: [{
+        label: canvasId,
+        data: records.map(r => r.index),
+        borderColor: color,
+        backgroundColor: color + '20',
+        borderWidth: 1.8,
+        fill: true,
+        tension: 0.28,
+        pointRadius: 1.5,
+        pointHoverRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e293b',
+          titleColor: '#e2e8f0',
+          bodyColor: '#cbd5e1',
+          borderColor: '#334155',
+          borderWidth: 1,
+          callbacks: {
+            label: ctx => `宝妈指数: ${ctx.parsed.y}`,
+            afterLabel: ctx => `样本帖子: ${records[ctx.dataIndex]?.post_count || 0}`,
+          }
+        }
+      },
+      scales: {
+        y: {
+          min: 0, max: 100,
+          grid: { color: '#33415533' },
+          ticks: { color: '#64748b', maxTicksLimit: 4 },
+        },
+        x: {
+          grid: { color: '#33415533' },
+          ticks: { color: '#64748b', maxTicksLimit: 4 },
+        }
+      }
+    }
+  });
+}
+
+function buildKeywordCompareChart(canvasId, datasets, labels) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !labels.length || !datasets.length) return null;
+  const ctx = canvas.getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e293b',
+          titleColor: '#e2e8f0',
+          bodyColor: '#cbd5e1',
+          borderColor: '#334155',
+          borderWidth: 1,
+        }
+      },
+      scales: {
+        y: {
+          min: 0, max: 100,
+          grid: { color: '#33415533' },
+          ticks: { color: '#64748b', maxTicksLimit: 5 },
+        },
+        x: {
+          grid: { color: '#33415522' },
+          ticks: { color: '#64748b', maxTicksLimit: 8 },
+        }
+      }
+    }
+  });
+}
+
+function parseDateKey(value) {
+  return new Date(`${value}T00:00:00`);
+}
+
+function toDateKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildContinuousSeries(records, labelKey, stepDays) {
+  if (!records.length) return [];
+  const sorted = [...records].sort((a, b) => String(a[labelKey]).localeCompare(String(b[labelKey])));
+  const start = parseDateKey(sorted[0][labelKey]);
+  const end = parseDateKey(sorted[sorted.length - 1][labelKey]);
+  const rowMap = new Map(sorted.map(row => [row[labelKey], row]));
+  const series = [];
+
+  for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + stepDays)) {
+    const key = toDateKey(cursor);
+    const row = rowMap.get(key);
+    series.push(row || {
+      [labelKey]: key,
+      index: 0,
+      post_count: 0,
+      newbie_posts: 0,
+      synthetic: true,
+    });
+  }
+
+  return series;
+}
+
+function buildKeywordMiniChart(canvasId, color, records, labelKey, mode) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !records.length) return null;
+  const series = buildContinuousSeries(records, labelKey, mode === 'weekly' ? 7 : 1);
+  canvas.style.width = `${Math.max(640, series.length * (mode === 'weekly' ? 12 : 4))}px`;
+  const ctx = canvas.getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: series.map(row => row[labelKey]),
+      datasets: [{
+        data: series.map(row => row.index),
+        borderColor: color,
+        backgroundColor: color + '22',
+        borderWidth: 2,
+        fill: true,
+        tension: mode === 'weekly' ? 0.18 : 0.12,
+        pointRadius: 0,
+        pointHoverRadius: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: '#1e293b',
+          titleColor: '#e2e8f0',
+          bodyColor: '#cbd5e1',
+          borderColor: '#334155',
+          borderWidth: 1,
+          callbacks: {
+            title: items => items[0]?.label || '',
+            label: ctx => `宝妈指数: ${ctx.parsed.y}`,
+            afterLabel: ctx => `样本帖子: ${series[ctx.dataIndex]?.post_count || 0}`,
+          }
+        },
+      },
+      scales: {
+        y: {
+          min: 0,
+          max: 100,
+          display: false,
+        },
+        x: {
+          display: false,
+        }
+      },
+      elements: {
+        line: {
+          capBezierPoints: true,
+        }
+      }
+    }
+  });
+}
+
+function buildSeriesPalette(baseColor, count) {
+  const palette = [
+    baseColor,
+    '#60a5fa',
+    '#fbbf24',
+    '#34d399',
+    '#f87171',
+    '#c084fc',
+    '#22d3ee',
+    '#f472b6',
+    '#a3e635',
+    '#fb923c',
+  ];
+  return Array.from({ length: count }, (_, index) => palette[index % palette.length]);
+}
+
+function renderKeywordHistory(data) {
+  const panel = document.getElementById('keyword-panel');
+  const toolbar = document.getElementById('keyword-toolbar');
+  const stage = document.getElementById('keyword-stage');
+  const keywordHistory = data.keyword_history || {};
+  const sectors = Object.keys(keywordHistory).filter(key => (keywordHistory[key]?.keywords || []).length);
+  const KEYWORD_PREVIEW_COUNT = 6;
+
+  if (!sectors.length) {
+    panel.innerHTML = '<h3>🧭 关键词日线 / 周线</h3><div class="loading">暂无关键词历史数据，先运行一轮带 MySQL 的 pipeline.py</div>';
+    return;
+  }
+
+  keywordCharts.forEach(chart => chart.destroy());
+  keywordCharts = [];
+
+  function collectSeriesRange(recordsByKeyword, labelKey) {
+    const labels = new Set();
+    Object.values(recordsByKeyword || {}).forEach(records => {
+      (records || []).forEach(item => {
+        if (item[labelKey]) labels.add(item[labelKey]);
+      });
+    });
+    return Array.from(labels).sort();
+  }
+
+  function formatShortLabel(raw) {
+    return (raw || '').slice(5);
+  }
+
+  function buildCompareDatasets(sector, keywords, recordsByKeyword, labelKey) {
+    const allLabels = collectSeriesRange(recordsByKeyword, labelKey);
+    const palette = buildSeriesPalette(SECTOR_COLORS[sector] || '#94a3b8', keywords.length);
+    const datasets = keywords.map((keyword, index) => {
+      const rows = recordsByKeyword?.[keyword] || [];
+      const rowMap = new Map(rows.map(row => [row[labelKey], row]));
+      return {
+        label: keyword,
+        data: allLabels.map(label => rowMap.get(label)?.index ?? null),
+        borderColor: palette[index],
+        backgroundColor: palette[index] + '20',
+        borderWidth: 2,
+        tension: 0.25,
+        spanGaps: true,
+        pointRadius: 1.5,
+        pointHoverRadius: 4,
+      };
+    });
+    return {
+      labels: allLabels.map(formatShortLabel),
+      rawLabels: allLabels,
+      datasets,
+      palette,
+    };
+  }
+
+  function renderSectorCards(sector) {
+    const payload = keywordHistory[sector] || {};
+    const keywords = payload.keywords || [];
+    if (!stage) return;
+    keywordCharts.forEach(chart => chart.destroy());
+    keywordCharts = [];
+    const visibleKeywords = expandedKeywords ? keywords : keywords.slice(0, KEYWORD_PREVIEW_COUNT);
+    const recordMap = activeMode === 'weekly' ? (payload.weekly || {}) : (payload.daily || {});
+    const labelKey = activeMode === 'weekly' ? 'week' : 'date';
+    const lengths = keywords.map(keyword => (recordMap[keyword] || []).length).filter(Boolean);
+    const pointRange = `${Math.min(...lengths, 0)}-${Math.max(...lengths, 0)}`;
+    const palette = buildSeriesPalette(SECTOR_COLORS[sector] || '#94a3b8', keywords.length);
+    const allRows = Object.values(recordMap).flat();
+    const allDates = allRows.map(row => row[labelKey]).filter(Boolean).sort();
+    const rangeStart = allDates[0] || '--';
+    const rangeEnd = allDates[allDates.length - 1] || '--';
+
+    stage.innerHTML = `
+      <div class="keyword-sector-head">
+        <div>
+          <div class="keyword-sector-title">${SECTOR_NAMES[sector] || sector}</div>
+          <div class="keyword-sector-subtitle">${keywords.length} 个相关标的 / 关键词，${activeMode === 'weekly' ? '按周' : '按天'}历史走势</div>
+        </div>
+        <div class="keyword-sector-subtitle">${rangeStart} 至 ${rangeEnd} · ${activeMode === 'weekly' ? '有效周点' : '有效日点'} ${pointRange}</div>
+      </div>
+      <div class="keyword-subtoolbar">
+        <div class="keyword-mode-tabs">
+          <button class="keyword-mode-tab ${activeMode === 'daily' ? 'active' : ''}" data-keyword-mode="daily">日线</button>
+          <button class="keyword-mode-tab ${activeMode === 'weekly' ? 'active' : ''}" data-keyword-mode="weekly">周线</button>
+        </div>
+        ${keywords.length > KEYWORD_PREVIEW_COUNT ? `
+          <button class="keyword-more" data-keyword-toggle="${sector}">
+            ${expandedKeywords ? '收起关键词' : `更多关键词 +${keywords.length - KEYWORD_PREVIEW_COUNT}`}
+          </button>
+        ` : ''}
+      </div>
+      <div class="keyword-mini-grid" id="keyword-mini-grid-${sector}"></div>
+    `;
+
+    const grid = document.getElementById(`keyword-mini-grid-${sector}`);
+    if (grid) {
+      grid.innerHTML = visibleKeywords.map((keyword) => {
+        const paletteIndex = keywords.indexOf(keyword);
+        const rows = recordMap[keyword] || [];
+        const latest = rows[rows.length - 1];
+        const prev = rows[rows.length - 2];
+        const delta = latest && prev ? Number((latest.index - prev.index).toFixed(1)) : null;
+        const deltaClass = delta == null ? 'flat' : (delta > 0 ? 'up' : (delta < 0 ? 'down' : 'flat'));
+        const deltaText = delta == null ? '新增' : `${delta > 0 ? '+' : ''}${delta}`;
+        return `
+          <div class="keyword-mini-card">
+            <div class="keyword-mini-info">
+              <div class="keyword-mini-top">
+                <div class="keyword-mini-name" title="${keyword}">${keyword}</div>
+                <div class="keyword-mini-points">${rows.length} 个${activeMode === 'weekly' ? '周点' : '日点'}</div>
+              </div>
+              <div class="keyword-mini-meta">
+                <div class="keyword-mini-value">${latest?.index ?? '-'}</div>
+                <div class="keyword-mini-delta ${deltaClass}">${deltaText}</div>
+              </div>
+              <div class="keyword-mini-foot">
+                <span>${rows[0]?.[labelKey]?.slice?.(5) || '--'}</span>
+                <span>${latest?.[labelKey]?.slice?.(5) || '--'}</span>
+              </div>
+            </div>
+            <div class="keyword-mini-chart">
+              <canvas id="keyword-mini-${sector}-${paletteIndex}"></canvas>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      visibleKeywords.forEach((keyword) => {
+        const paletteIndex = keywords.indexOf(keyword);
+        const rows = recordMap[keyword] || [];
+        const chart = buildKeywordMiniChart(
+          `keyword-mini-${sector}-${paletteIndex}`,
+          palette[paletteIndex] || '#94a3b8',
+          rows,
+          labelKey,
+          activeMode
+        );
+        if (chart) keywordCharts.push(chart);
+      });
+    }
+
+    document.querySelectorAll('[data-keyword-mode]').forEach(button => {
+      button.addEventListener('click', () => {
+        const mode = button.getAttribute('data-keyword-mode');
+        if (!mode || mode === activeMode) return;
+        activeMode = mode;
+        renderSectorCards(activeSector);
+      });
+    });
+
+    const toggle = document.querySelector(`[data-keyword-toggle="${sector}"]`);
+    if (toggle) {
+      toggle.addEventListener('click', () => {
+        expandedKeywords = !expandedKeywords;
+        renderSectorCards(activeSector);
+      });
+    }
+  }
+
+  let activeSector = sectors.includes('storage') ? 'storage' : sectors[0];
+  let activeMode = 'daily';
+  let expandedKeywords = false;
+
+  function renderSectorTabs() {
+    toolbar.innerHTML = sectors.map(sector => {
+      const count = (keywordHistory[sector]?.keywords || []).length;
+      return `
+        <button class="keyword-tab ${sector === activeSector ? 'active' : ''}" data-sector-tab="${sector}">
+          ${SECTOR_NAMES[sector] || sector} ${count}
+        </button>
+      `;
+    }).join('');
+
+    document.querySelectorAll('[data-sector-tab]').forEach(button => {
+      button.addEventListener('click', () => {
+        const sector = button.getAttribute('data-sector-tab');
+        if (!sector || sector === activeSector) return;
+        activeSector = sector;
+        activeMode = 'daily';
+        expandedKeywords = false;
+        renderSectorTabs();
+        renderSectorCards(activeSector);
+      });
+    });
+  }
+
+  renderSectorTabs();
+  renderSectorCards(activeSector);
+}
+
 // 加载数据
 fetch('data/dashboard_data.json')
   .then(r => r.json())
   .then(data => {
     renderCards(data);
     renderCharts(data);
+    renderKeywordHistory(data);
     renderTopPosts(data);
   })
   .catch(err => {
