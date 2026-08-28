@@ -8,6 +8,8 @@ from datetime import datetime
 import json
 import re
 
+from .llm_sentiment import analyze_sentiment_with_llm, should_run_llm_second_pass
+
 # ============================================================
 # 信号定义库
 # ============================================================
@@ -171,6 +173,10 @@ class AnalysisResult:
     level: str = "未判定"      # 纯小白/偏小白/中间派/偏专业/专业
     reasoning: str = ""        # 人类可读的推理过程
     sentiment_score: float = 0  # -1(恐慌) ~ +1(贪婪)
+    sentiment_label: str = "neutral"  # fear/greed/neutral/mixed
+    emotion_intensity: float = 0.0    # 0~1 情绪强度
+    sentiment_confidence: float = 0.0 # 0~1 置信度
+    sentiment_source: str = "rules"   # rules / llm
     intent: str = "neutral"     # buy/sell/neutral — 买入/卖出意图
     intent_strength: float = 0  # 0~1 意图强度
     
@@ -343,6 +349,14 @@ def analyze_post(post: Dict, sector: str) -> AnalysisResult:
     
     # 7. 情绪分析
     result.sentiment_score = _analyze_sentiment(full_text)
+    if result.sentiment_score > 0:
+        result.sentiment_label = "greed"
+    elif result.sentiment_score < 0:
+        result.sentiment_label = "fear"
+    else:
+        result.sentiment_label = "neutral"
+    result.emotion_intensity = abs(result.sentiment_score)
+    result.sentiment_confidence = 0.35 if result.sentiment_score != 0 else 0.2
     
     # 8. 买入/卖出意图判定
     buy_count = sum(1 for kw in BUY_KEYWORDS if kw in full_text)
@@ -357,13 +371,42 @@ def analyze_post(post: Dict, sector: str) -> AnalysisResult:
     else:
         result.intent = "neutral"
         result.intent_strength = 0
-    
+
+    # 8.5 LLM 二次判定：默认只处理规则不确定的样本
+    if should_run_llm_second_pass(result):
+        try:
+            llm_decision = analyze_sentiment_with_llm(
+                title=title,
+                content=content,
+                sector=sector,
+                platform=result.platform,
+                current_result=result,
+            )
+        except Exception as exc:
+            llm_decision = None
+            result.key_signals.append(f"LLM二判失败: {str(exc)[:80]}")
+
+        if llm_decision:
+            result.sentiment_score = llm_decision.sentiment_score
+            result.sentiment_label = llm_decision.sentiment_label
+            result.emotion_intensity = llm_decision.emotion_intensity
+            result.sentiment_confidence = llm_decision.confidence
+            result.sentiment_source = llm_decision.source
+            result.intent = llm_decision.intent
+            result.intent_strength = llm_decision.intent_strength
+            if llm_decision.reasoning:
+                result.reasoning += f" 情绪二判: {llm_decision.reasoning}"
+
     # 9. 关键信号摘要（用于前端卡片）
     result.key_signals = []
     for name, desc, weight, kws in matched_newbie[:3]:
         result.key_signals.append(f"「{name}」{desc} (命中: {', '.join(kws[:2])})")
     for name, desc, weight, kws in matched_pro[:2]:
         result.key_signals.append(f"「{name}」{desc} (命中: {', '.join(kws[:2])})")
+    if result.sentiment_source == "llm":
+        result.key_signals.append(
+            f"「LLM情绪」{result.sentiment_label} / 强度{result.emotion_intensity:.2f} / 意图{result.intent}"
+        )
     
     result.matched_newbie = [(n, d, w) for n, d, w, _ in matched_newbie]
     result.matched_pro = [(n, d, w) for n, d, w, _ in matched_pro]
