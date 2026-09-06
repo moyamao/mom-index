@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from .anti_detection import get_anti_detection
+from notifications import send_dingtalk_text, xhs_verification_message
 from runtime_config import ini_get_bool, ini_get_float, ini_get_int
 from keyword_config import get_keywords
 from post_time import normalize_social_datetime
@@ -178,6 +179,10 @@ async def _wait_for_verification(page, keyword: str) -> bool:
 
     print(f"    ⛔ XHS 触发滑块验证: {keyword}")
     print(f"    请在当前浏览器页面完成验证；最多等待 {wait_seconds} 秒，通过后自动继续。")
+    await asyncio.to_thread(
+        send_dingtalk_text,
+        xhs_verification_message(keyword, wait_seconds),
+    )
     deadline = asyncio.get_running_loop().time() + wait_seconds
     while asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(3)
