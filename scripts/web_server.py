@@ -58,6 +58,6 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     host = ini_get("web", "host", "0.0.0.0") or "0.0.0.0"
-    port = ini_get_int("web", "port", 8080)
+    port = ini_get_int("web", "port", 8081)
     print(f"mom-index web: http://{host}:{port}/dashboard.html")
     ThreadingHTTPServer((host, port), Handler).serve_forever()

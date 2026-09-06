@@ -125,6 +125,8 @@ python3 scripts/analyze_mysql_posts.py --days 7 --limit 1000
 python3 scripts/web_server.py
 ```
 
+默认监听 `0.0.0.0:8081`，避免与本地 14B LLM 的 `8080` 端口冲突。
+
 访问 `dashboard.html` 查看模型批次概览，访问 `platform_trends.html` 按模型、平台和小时/日/周查看变化。关键词管理默认只读；写操作需在 `[keyword_admin]` 启用并设置 token。
 
 ## 连接 Mac mini 上的 Qwen
