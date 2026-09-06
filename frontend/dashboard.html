@@ -135,6 +135,20 @@ body {
   gap: 8px;
   margin-top: 8px;
 }
+.llm-profile {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.llm-metric {
+  padding: 7px 8px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: rgba(15,23,42,0.28);
+}
+.llm-metric span { display:block; color:#64748b; font-size:9px; }
+.llm-metric strong { display:block; color:#e2e8f0; font-size:11px; margin-top:2px; }
 .card .delta-row {
   margin-top: 10px;
   display: flex;
@@ -509,6 +523,16 @@ function getEmoji(idx) {
   return '🔵';
 }
 
+function dominantMetric(counts, labels, excluded = []) {
+  const entries = Object.entries(counts || {}).filter(([key]) => !excluded.includes(key));
+  const total = Object.values(counts || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  if (!entries.length || !total) return '暂无';
+  entries.sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+  const [key, count] = entries[0];
+  if (!count) return '暂无';
+  return `${labels[key] || key} ${Math.round(count / total * 100)}%`;
+}
+
 function renderCards(data) {
   const container = document.getElementById('cards');
   const latest = data.latest;
@@ -531,6 +555,10 @@ function renderCards(data) {
     const sourceCounts = d.source_counts || {};
     const platformBreakdown = d.platform_breakdown || {};
     const divergence = d.platform_divergence ?? 0;
+    const llm = d.llm_profile || {};
+    const sentimentText = dominantMetric(llm.sentiment, {fear:'恐慌', greed:'贪婪', neutral:'中性', mixed:'混合'});
+    const positionText = dominantMetric(llm.position, {none:'空仓', holding:'持有', trapped:'被套', exited:'已退出'}, ['unknown']);
+    const outlookText = dominantMetric(llm.outlook, {bullish:'看涨', bearish:'看跌', sideways:'震荡'}, ['unknown']);
     const totalSources = Object.values(sourceCounts).reduce((sum, value) => sum + value, 0);
     const sourceChips = Object.entries(sourceCounts)
       .sort((a, b) => b[1] - a[1])
@@ -586,6 +614,12 @@ function renderCards(data) {
         </div>
         <div class="detail-row">
           <span>平台分歧</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
+        </div>
+        <div class="llm-profile">
+          <div class="llm-metric"><span>LLM 情绪</span><strong>${sentimentText}</strong></div>
+          <div class="llm-metric"><span>持仓状态</span><strong>${positionText}</strong></div>
+          <div class="llm-metric"><span>未来观点</span><strong>${outlookText}</strong></div>
+          <div class="llm-metric"><span>模型覆盖</span><strong>${llm.analyzed_posts || 0}帖 · ${llm.coverage_ratio || 0}%</strong></div>
         </div>
         <div class="platform-breakdown">${platformChips || '<span class="source-chip">暂无平台拆分</span>'}</div>
         <div class="detail-row source-row">

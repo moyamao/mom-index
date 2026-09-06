@@ -105,6 +105,8 @@ def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
                 "llm_error": getattr(analysis, "llm_error", "") or "",
                 "intent": getattr(analysis, "intent", "neutral") or "neutral",
                 "intent_strength": float(getattr(analysis, "intent_strength", 0) or 0),
+                "position_status": getattr(analysis, "position_status", "unknown") or "unknown",
+                "market_outlook": getattr(analysis, "market_outlook", "unknown") or "unknown",
                 "reasoning": getattr(analysis, "reasoning", "") or "",
                 "key_signals": list(getattr(analysis, "key_signals", []) or []),
                 "source_date": getattr(analysis, "source_date", "") or "",

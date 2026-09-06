@@ -191,6 +191,8 @@ class AnalysisResult:
     llm_error: str = ""
     intent: str = "neutral"     # buy/sell/neutral — 买入/卖出意图
     intent_strength: float = 0  # 0~1 意图强度
+    position_status: str = "unknown"  # none/holding/trapped/exited/unknown
+    market_outlook: str = "unknown"   # bullish/bearish/sideways/unknown
     
     # 用于前端展示
     key_signals: List[str] = field(default_factory=list)
@@ -535,6 +537,8 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
     result.prompt_version = llm_prompt_version()
     result.intent = llm_decision.intent
     result.intent_strength = llm_decision.intent_strength
+    result.position_status = llm_decision.position_status
+    result.market_outlook = llm_decision.market_outlook
     if llm_decision.reasoning:
         result.reasoning += f" 情绪二判: {llm_decision.reasoning}"
 

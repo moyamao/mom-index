@@ -48,6 +48,14 @@ def compute_sector_index(analysis_results: List) -> Dict:
         source_counts[platform] = source_counts.get(platform, 0) + 1
         by_platform.setdefault(platform, []).append(item)
 
+    llm_posts = [r for r in valid_posts if getattr(r, "sentiment_source", "rules") == "llm"]
+    sentiment_counts = {name: sum(getattr(r, "sentiment_label", "neutral") == name for r in llm_posts)
+                        for name in ("fear", "greed", "neutral", "mixed")}
+    position_counts = {name: sum(getattr(r, "position_status", "unknown") == name for r in llm_posts)
+                       for name in ("none", "holding", "trapped", "exited", "unknown")}
+    outlook_counts = {name: sum(getattr(r, "market_outlook", "unknown") == name for r in llm_posts)
+                      for name in ("bullish", "bearish", "sideways", "unknown")}
+
     summary = _compute_summary_metrics(valid_posts)
     index = summary["index"]
     newbie_posts = summary["newbie_posts"]
@@ -100,6 +108,13 @@ def compute_sector_index(analysis_results: List) -> Dict:
             "source_counts": source_counts,
             "platform_breakdown": platform_breakdown,
             "platform_divergence": platform_divergence,
+            "llm_profile": {
+                "analyzed_posts": len(llm_posts),
+                "coverage_ratio": round(len(llm_posts) / max(len(valid_posts), 1) * 100, 1),
+                "sentiment": sentiment_counts,
+                "position": position_counts,
+                "outlook": outlook_counts,
+            },
         },
         "top_newbie_posts": [
             {

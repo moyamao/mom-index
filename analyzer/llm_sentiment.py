@@ -22,6 +22,8 @@ class LlmSentimentDecision:
     emotion_intensity: float
     intent: str
     intent_strength: float
+    position_status: str
+    market_outlook: str
     confidence: float
     reasoning: str
     source: str = "llm"
@@ -81,8 +83,8 @@ def llm_profile() -> str:
 def llm_prompt_version() -> str:
     return (
         os.environ.get("MOM_INDEX_LLM_PROMPT_VERSION", "").strip()
-        or ini_get("llm", "prompt_version", "sentiment-v1").strip()
-        or "sentiment-v1"
+        or ini_get("llm", "prompt_version", "sentiment-v2").strip()
+        or "sentiment-v2"
     )
 
 
@@ -232,6 +234,8 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         emotion_intensity=_clamp(float(parsed.get("emotion_intensity", 0.0)), 0.0, 1.0),
         intent=_normalize_intent(parsed.get("intent", "neutral")),
         intent_strength=_clamp(float(parsed.get("intent_strength", 0.0)), 0.0, 1.0),
+        position_status=_normalize_position(parsed.get("position_status", "unknown")),
+        market_outlook=_normalize_outlook(parsed.get("market_outlook", "unknown")),
         confidence=_clamp(float(parsed.get("confidence", 0.5)), 0.0, 1.0),
         reasoning=str(parsed.get("reasoning", "") or "").strip(),
     )
@@ -253,7 +257,7 @@ def _system_prompt(*, include_reasoning: bool) -> str:
     )
     return (
         "你是中文投资社媒情绪分析助手。"
-        "你的任务不是判断股票涨跌，而是判断发帖人的情绪与交易意图。"
+        "你的任务是提取发帖人的情绪、交易意图、当前持仓状态和本人对未来走势的观点，不是替用户预测股票涨跌。"
         "重点区分：恐慌、贪婪、中性、混合；以及买入、卖出、观望。"
         "要识别反讽、口嗨、转述新闻、纯资讯、情绪宣泄。"
         "如果帖子主要是在转发资讯或产业事实，而不是表达本人情绪，sentiment_label 应偏 neutral，intent 应为 neutral。"
@@ -264,6 +268,8 @@ def _system_prompt(*, include_reasoning: bool) -> str:
         '"emotion_intensity":0.0,'
         '"intent":"buy|sell|neutral",'
         '"intent_strength":0.0,'
+        '"position_status":"none|holding|trapped|exited|unknown",'
+        '"market_outlook":"bullish|bearish|sideways|unknown",'
         '"confidence":0.0,'
         f"{reasoning_line}"
         "}"
@@ -300,6 +306,16 @@ def _normalize_intent(value: Any) -> str:
     if raw in {"hold", "observe", "watch"}:
         return "neutral"
     return "neutral"
+
+
+def _normalize_position(value: Any) -> str:
+    raw = str(value or "unknown").strip().lower()
+    return raw if raw in {"none", "holding", "trapped", "exited", "unknown"} else "unknown"
+
+
+def _normalize_outlook(value: Any) -> str:
+    raw = str(value or "unknown").strip().lower()
+    return raw if raw in {"bullish", "bearish", "sideways", "unknown"} else "unknown"
 
 
 def _clamp(value: float, low: float, high: float) -> float:

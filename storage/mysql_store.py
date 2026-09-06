@@ -182,6 +182,8 @@ def _ensure_tables(cur) -> None:
             sentiment_score DECIMAL(6,2) NOT NULL DEFAULT 0,
             intent VARCHAR(16) DEFAULT '',
             intent_strength DECIMAL(6,2) NOT NULL DEFAULT 0,
+            position_status VARCHAR(16) NOT NULL DEFAULT 'unknown',
+            market_outlook VARCHAR(16) NOT NULL DEFAULT 'unknown',
             key_signals_json TEXT,
             reasoning TEXT,
             matched_newbie_json TEXT,
@@ -206,6 +208,8 @@ def _ensure_tables(cur) -> None:
         "prompt_version": "VARCHAR(64) NOT NULL DEFAULT 'legacy'",
         "analysis_engine": "VARCHAR(16) NOT NULL DEFAULT 'rules'",
         "content_hash": "CHAR(64) DEFAULT ''",
+        "position_status": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
+        "market_outlook": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
     }
     for column, definition in analysis_columns.items():
         if not _column_exists(cur, "mom_index_analysis", column):
@@ -279,6 +283,8 @@ def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_post
                 float(item.sentiment_score),
                 item.intent,
                 float(item.intent_strength),
+                getattr(item, "position_status", "unknown") or "unknown",
+                getattr(item, "market_outlook", "unknown") or "unknown",
                 json.dumps(item.key_signals, ensure_ascii=False),
                 item.reasoning,
                 json.dumps(item.matched_newbie, ensure_ascii=False),
@@ -345,11 +351,11 @@ def persist_pipeline_run(
                     """
                     INSERT INTO mom_index_analysis (
                         run_id, sector, post_id, title, platform, newbie_score, newbie_confidence,
-                        level, sentiment_score, intent, intent_strength, key_signals_json, reasoning,
+                        level, sentiment_score, intent, intent_strength, position_status, market_outlook, key_signals_json, reasoning,
                         matched_newbie_json, matched_pro_json, batch_id, analysis_profile,
                         model_name, prompt_version, analysis_engine, content_hash
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     analysis_rows,
                 )
@@ -436,6 +442,8 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                         int(post.get("run_id") or 0), sector, item.post_id, item.title, item.platform,
                         float(item.newbie_score), item.newbie_confidence, item.level,
                         float(item.sentiment_score), item.intent, float(item.intent_strength),
+                        getattr(item, "position_status", "unknown") or "unknown",
+                        getattr(item, "market_outlook", "unknown") or "unknown",
                         json.dumps(item.key_signals, ensure_ascii=False), item.reasoning,
                         json.dumps(item.matched_newbie, ensure_ascii=False),
                         json.dumps(item.matched_pro, ensure_ascii=False), batch_id, llm_profile(),
@@ -446,10 +454,10 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                 cur.executemany(
                     """INSERT INTO mom_index_analysis
                        (run_id,sector,post_id,title,platform,newbie_score,newbie_confidence,
-                        level,sentiment_score,intent,intent_strength,key_signals_json,reasoning,
+                        level,sentiment_score,intent,intent_strength,position_status,market_outlook,key_signals_json,reasoning,
                         matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
                         prompt_version,analysis_engine,content_hash)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     rows,
                 )
             cur.execute(
