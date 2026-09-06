@@ -410,11 +410,12 @@ async def _current_sort_label(page) -> str:
                 const box = node.getBoundingClientRect();
                 return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
               };
-              const nodes = Array.from(document.querySelectorAll('button, [role="button"], [class*="sort"]'));
+              const nodes = Array.from(document.querySelectorAll('button, a, span, [role="button"], [class*="sort"]'));
               for (const node of nodes) {
                 if (!visible(node)) continue;
+                if (node.closest('article, [role="menu"], [role="listbox"], ul, li')) continue;
                 const text = (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
-                if (/^(默认排序|最新|最新发布)$/.test(text)) return text;
+                if (/^(默认排序|最新|最新发布|最新讨论)$/.test(text)) return text;
               }
               return '';
             }
@@ -427,12 +428,13 @@ async def _current_sort_label(page) -> str:
 async def _switch_to_latest_sort(page) -> tuple[bool, str]:
     """Select newest-first and verify that the visible control no longer says default sort."""
     before = await _current_sort_label(page)
-    if before in {"最新", "最新发布"}:
+    if before in {"最新", "最新发布", "最新讨论"}:
         return True, before
 
     menu_opened = await _click_first_visible(
         page,
         [
+            ':text-is("默认排序")',
             'button:has-text("默认排序")',
             '[role="button"]:has-text("默认排序")',
             'span:has-text("默认排序")',
@@ -445,6 +447,9 @@ async def _switch_to_latest_sort(page) -> tuple[bool, str]:
     latest_selected = await _click_first_visible(
         page,
         [
+            ':text-is("最新讨论")',
+            ':text-is("最新发布")',
+            ':text-is("最新")',
             'button:has-text("最新发布")',
             '[role="button"]:has-text("最新发布")',
             'li:has-text("最新发布")',
@@ -456,8 +461,10 @@ async def _switch_to_latest_sort(page) -> tuple[bool, str]:
     )
     if latest_selected:
         await asyncio.sleep(1.5)
+        # Close an open option list before checking the selected label.
+        await page.keyboard.press("Escape")
     after = await _current_sort_label(page)
-    if latest_selected and after in {"最新", "最新发布"}:
+    if latest_selected and after in {"最新", "最新发布", "最新讨论"}:
         return True, after
     return False, after or before or "未识别"
 
@@ -478,6 +485,7 @@ async def _search_xueqiu_on_page(browser, page, keyword: str, limit: int, debug_
     except Exception:
         pass
 
+    await asyncio.sleep(float(os.environ.get("XUEQIU_RENDER_WAIT_SECONDS", _render_wait_seconds())))
     latest_sort, sort_label = await _switch_to_latest_sort(page)
     if latest_sort:
         print(f"    [雪球] '{keyword}' 已确认最新排序 ({sort_label})")
@@ -503,6 +511,9 @@ async def _search_xueqiu_on_page(browser, page, keyword: str, limit: int, debug_
 
     if _looks_like_login_page(current_url, html):
         raise RuntimeError(f"雪球页面仍要求登录，当前停留在未登录首页: {current_url}")
+
+    if not latest_sort:
+        raise RuntimeError(f"雪球未确认最新讨论排序，停止提取以免混入历史结果: {sort_label}")
 
     if current_url.rstrip("/") == "https://xueqiu.com" and keyword not in html:
         raise RuntimeError(f"雪球搜索未生效，当前仍停留在首页: {current_url}")
