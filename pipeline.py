@@ -235,12 +235,15 @@ def _deconflict_cross_sector_posts(all_posts: dict) -> dict:
     return result
 
 
-def _filter_recent_posts(all_posts: dict) -> dict:
-    """只保留发布时间明确且处于时效窗口内的帖子。"""
+def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
+    """优先使用今日样本；数量不足时自动扩大到最近若干天。"""
     max_age_days = max(1, ini_get_int("recency", "max_age_days", 7))
+    daily_min_posts = max(1, ini_get_int("recency", "daily_min_posts", 20))
     now = beijing_now()
     cutoff = now - timedelta(days=max_age_days)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     filtered_posts = {}
+    windows = {}
 
     for sector, posts in all_posts.items():
         kept = []
@@ -277,8 +280,23 @@ def _filter_recent_posts(all_posts: dict) -> dict:
             detail = ", ".join(f"{name}={count}" for name, count in sorted(unknown_by_platform.items()))
             print(f"  [时效-{sector}] {unknown_time} 条未识别发布时间，排除当期分析 ({detail})")
         kept.sort(key=lambda post: post["published_at"], reverse=True)
-        filtered_posts[sector] = kept
-    return filtered_posts
+        daily_posts = [post for post in kept if datetime.fromisoformat(post["published_at"]) >= today_start]
+        use_daily = len(daily_posts) >= daily_min_posts
+        selected = daily_posts if use_daily else kept
+        mode = "day" if use_daily else "week"
+        label = "今日" if use_daily else f"近{max_age_days}天"
+        filtered_posts[sector] = selected
+        windows[sector] = {
+            "mode": mode,
+            "label": label,
+            "sample_count": len(selected),
+            "daily_count": len(daily_posts),
+            "daily_min_posts": daily_min_posts,
+            "start_at": selected[-1]["published_at"] if selected else "",
+            "end_at": selected[0]["published_at"] if selected else "",
+        }
+        print(f"  [窗口-{sector}] {label}: {len(selected)} 条 (今日 {len(daily_posts)} 条，日阈值 {daily_min_posts})")
+    return filtered_posts, windows
 
 
 def run_pipeline():
@@ -342,7 +360,7 @@ def run_pipeline():
 
     all_posts = _deconflict_cross_sector_posts(all_posts)
     all_posts = _dedupe_posts_by_title(all_posts)
-    all_posts = _filter_recent_posts(all_posts)
+    all_posts, analysis_windows = _filter_recent_posts(all_posts)
     
     total_collected = sum(len(v) for v in all_posts.values())
     print(f"\n  共采集 {total_collected} 条帖子\n")
@@ -366,6 +384,7 @@ def run_pipeline():
     sector_indices = {}
     for sector, results in analysis_results.items():
         result = compute_sector_index(results)
+        result.setdefault("details", {})["analysis_window"] = analysis_windows.get(sector, {})
         sector_indices[sector] = result
         name = SECTOR_NAMES.get(sector, sector)
         d = result["details"]
