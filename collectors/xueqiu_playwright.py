@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from .anti_detection import get_anti_detection
 from runtime_config import ini_get_bool, ini_get_float, ini_get_int
+from post_time import normalize_social_datetime
 
 try:
     from playwright.async_api import async_playwright
@@ -360,6 +361,7 @@ async def _enrich_posts_with_detail(browser, posts: List[Dict], keyword: str, de
                     post["author"] = _clean_author(detail["author"])
                 if detail.get("date"):
                     post["date"] = _clean_trailing_ui_text(detail["date"]) or post.get("date", "未知")
+                    post["published_at"] = normalize_social_datetime(post["date"])
                 post["detail_fetched"] = True
                 post["content_source"] = "detail_page"
             except Exception as e:
@@ -371,6 +373,93 @@ async def _enrich_posts_with_detail(browser, posts: List[Dict], keyword: str, de
         return posts
     finally:
         await detail_page.close()
+
+
+async def _click_first_visible(page, selectors: List[str], timeout_ms: int = 2500) -> bool:
+    """Click a visible UI control without depending on one fragile page layout."""
+    deadline = asyncio.get_running_loop().time() + max(timeout_ms, 0) / 1000
+    while True:
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = await locator.count()
+            except Exception:
+                continue
+            for index in range(min(count, 6)):
+                candidate = locator.nth(index)
+                try:
+                    if not await candidate.is_visible():
+                        continue
+                    await candidate.click(timeout=1500)
+                    return True
+                except Exception:
+                    continue
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.2)
+
+
+async def _current_sort_label(page) -> str:
+    """Read the visible sort control after its menu has closed."""
+    try:
+        return await page.evaluate(
+            """
+            () => {
+              const visible = (node) => {
+                const style = window.getComputedStyle(node);
+                const box = node.getBoundingClientRect();
+                return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
+              };
+              const nodes = Array.from(document.querySelectorAll('button, [role="button"], [class*="sort"]'));
+              for (const node of nodes) {
+                if (!visible(node)) continue;
+                const text = (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (/^(默认排序|最新|最新发布)$/.test(text)) return text;
+              }
+              return '';
+            }
+            """
+        )
+    except Exception:
+        return ""
+
+
+async def _switch_to_latest_sort(page) -> tuple[bool, str]:
+    """Select newest-first and verify that the visible control no longer says default sort."""
+    before = await _current_sort_label(page)
+    if before in {"最新", "最新发布"}:
+        return True, before
+
+    menu_opened = await _click_first_visible(
+        page,
+        [
+            'button:has-text("默认排序")',
+            '[role="button"]:has-text("默认排序")',
+            'span:has-text("默认排序")',
+        ],
+        timeout_ms=2200,
+    )
+    if menu_opened:
+        await asyncio.sleep(0.5)
+
+    latest_selected = await _click_first_visible(
+        page,
+        [
+            'button:has-text("最新发布")',
+            '[role="button"]:has-text("最新发布")',
+            'li:has-text("最新发布")',
+            'button:has-text("最新")',
+            '[role="button"]:has-text("最新")',
+            'li:has-text("最新")',
+        ],
+        timeout_ms=2500,
+    )
+    if latest_selected:
+        await asyncio.sleep(1.5)
+    after = await _current_sort_label(page)
+    if latest_selected and after in {"最新", "最新发布"}:
+        return True, after
+    return False, after or before or "未识别"
 
 
 async def _search_xueqiu_on_page(browser, page, keyword: str, limit: int, debug_dir: Optional[str]) -> List[Dict]:
@@ -388,6 +477,12 @@ async def _search_xueqiu_on_page(browser, page, keyword: str, limit: int, debug_
             await asyncio.sleep(1.5)
     except Exception:
         pass
+
+    latest_sort, sort_label = await _switch_to_latest_sort(page)
+    if latest_sort:
+        print(f"    [雪球] '{keyword}' 已确认最新排序 ({sort_label})")
+    else:
+        print(f"    ⚠️ [雪球] '{keyword}' 未确认最新排序，当前: {sort_label}")
 
     await asyncio.sleep(float(os.environ.get("XUEQIU_RENDER_WAIT_SECONDS", _render_wait_seconds())))
     html = await page.content()
@@ -537,6 +632,7 @@ async def _extract_posts(page, keyword: str, limit: int) -> List[Dict]:
                 "keyword": keyword,
                 "author": author,
                 "date": date_text,
+                "published_at": normalize_social_datetime(date_text),
                 "collected_at": datetime.now().isoformat(),
             }
         )
