@@ -55,6 +55,18 @@ def compute_sector_index(analysis_results: List) -> Dict:
                        for name in ("none", "holding", "trapped", "exited", "unknown")}
     outlook_counts = {name: sum(getattr(r, "market_outlook", "unknown") == name for r in llm_posts)
                       for name in ("bullish", "bearish", "sideways", "unknown")}
+    sentiment_weight = sum(max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1) for r in llm_posts)
+    market_sentiment_index = round(
+        sum(float(getattr(r, "sentiment_score", 0) or 0) * max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1)
+            for r in llm_posts) / max(sentiment_weight, 1) * 100,
+        1,
+    )
+    known_positions = sum(position_counts[name] for name in ("none", "holding", "trapped", "exited"))
+    known_outlooks = sum(outlook_counts[name] for name in ("bullish", "bearish", "sideways"))
+    outlook_index = round(
+        (outlook_counts["bullish"] - outlook_counts["bearish"]) / max(known_outlooks, 1) * 100,
+        1,
+    )
 
     summary = _compute_summary_metrics(valid_posts)
     index = summary["index"]
@@ -114,6 +126,16 @@ def compute_sector_index(analysis_results: List) -> Dict:
                 "sentiment": sentiment_counts,
                 "position": position_counts,
                 "outlook": outlook_counts,
+                "market_sentiment_index": market_sentiment_index,
+                "outlook_index": outlook_index,
+                "known_position_posts": known_positions,
+                "known_outlook_posts": known_outlooks,
+                "holding_ratio": round(position_counts["holding"] / max(known_positions, 1) * 100, 1),
+                "trapped_ratio": round(position_counts["trapped"] / max(known_positions, 1) * 100, 1),
+                "none_ratio": round(position_counts["none"] / max(known_positions, 1) * 100, 1),
+                "exited_ratio": round(position_counts["exited"] / max(known_positions, 1) * 100, 1),
+                "bullish_ratio": round(outlook_counts["bullish"] / max(known_outlooks, 1) * 100, 1),
+                "bearish_ratio": round(outlook_counts["bearish"] / max(known_outlooks, 1) * 100, 1),
             },
         },
         "top_newbie_posts": [
