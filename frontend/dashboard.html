@@ -124,11 +124,11 @@ body {
   min-width: 78px;
 }
 .platform-chip strong {
-  display: block;
-  font-size: 14px;
+  font-size: 12px;
   color: #e2e8f0;
-  margin-top: 2px;
 }
+.platform-title { display:flex; justify-content:space-between; margin-bottom:5px; }
+.platform-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:3px; color:#94a3b8; font-size:9px; }
 .platform-breakdown {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -583,13 +583,21 @@ function renderCards(data) {
       .join('');
     const platformChips = Object.entries(platformBreakdown)
       .sort((a, b) => (b[1]?.index || 0) - (a[1]?.index || 0))
-      .map(([platform, stats]) => `
+      .map(([platform, stats]) => {
+        const profile = stats.llm_profile || {};
+        const platformSentiment = Number(profile.market_sentiment_index || 0);
+        const platformOutlook = Number(profile.outlook_index || 0);
+        return `
         <div class="platform-chip">
-          ${PLATFORM_NAMES[platform] || platform}
-          <strong>${stats.index ?? 0}</strong>
-          <span style="color:#64748b">${stats.newbie_posts || 0}/${stats.valid_posts || 0}</span>
+          <div class="platform-title"><strong>${PLATFORM_NAMES[platform] || platform}</strong><span>${profile.analyzed_posts || 0}帖</span></div>
+          <div class="platform-metrics">
+            <span>情绪 <b style="color:${directionColor(platformSentiment)}">${platformSentiment > 0 ? '+' : ''}${platformSentiment}</b></span>
+            <span>预期 <b style="color:${directionColor(platformOutlook)}">${platformOutlook > 0 ? '+' : ''}${platformOutlook}</b></span>
+            <span>持有 ${profile.holding_ratio || 0}%</span>
+            <span>被套 ${profile.trapped_ratio || 0}%</span>
+          </div>
         </div>
-      `)
+      `})
       .join('');
     return `
       <div class="card ${key}">

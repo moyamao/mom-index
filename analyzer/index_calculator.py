@@ -18,6 +18,37 @@ SECTOR_NAMES = {
 }
 
 
+def _compute_llm_profile(posts: List) -> Dict:
+    llm_posts = [r for r in posts if getattr(r, "sentiment_source", "rules") == "llm"]
+    sentiment = {name: sum(getattr(r, "sentiment_label", "neutral") == name for r in llm_posts)
+                 for name in ("fear", "greed", "neutral", "mixed")}
+    position = {name: sum(getattr(r, "position_status", "unknown") == name for r in llm_posts)
+                for name in ("none", "holding", "trapped", "exited", "unknown")}
+    outlook = {name: sum(getattr(r, "market_outlook", "unknown") == name for r in llm_posts)
+               for name in ("bullish", "bearish", "sideways", "unknown")}
+    weight = sum(max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1) for r in llm_posts)
+    sentiment_index = round(sum(
+        float(getattr(r, "sentiment_score", 0) or 0) * max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1)
+        for r in llm_posts
+    ) / max(weight, 1) * 100, 1)
+    known_positions = sum(position[name] for name in ("none", "holding", "trapped", "exited"))
+    known_outlooks = sum(outlook[name] for name in ("bullish", "bearish", "sideways"))
+    ratio = lambda count, total: round(count / max(total, 1) * 100, 1)
+    return {
+        "analyzed_posts": len(llm_posts), "coverage_ratio": ratio(len(llm_posts), len(posts)),
+        "sentiment": sentiment, "position": position, "outlook": outlook,
+        "market_sentiment_index": sentiment_index,
+        "outlook_index": round((outlook["bullish"] - outlook["bearish"]) / max(known_outlooks, 1) * 100, 1),
+        "known_position_posts": known_positions, "known_outlook_posts": known_outlooks,
+        "holding_ratio": ratio(position["holding"], known_positions),
+        "trapped_ratio": ratio(position["trapped"], known_positions),
+        "none_ratio": ratio(position["none"], known_positions),
+        "exited_ratio": ratio(position["exited"], known_positions),
+        "bullish_ratio": ratio(outlook["bullish"], known_outlooks),
+        "bearish_ratio": ratio(outlook["bearish"], known_outlooks),
+    }
+
+
 def compute_sector_index(analysis_results: List) -> Dict:
     """
     计算单个板块的宝妈指数 (0-100)
@@ -48,25 +79,7 @@ def compute_sector_index(analysis_results: List) -> Dict:
         source_counts[platform] = source_counts.get(platform, 0) + 1
         by_platform.setdefault(platform, []).append(item)
 
-    llm_posts = [r for r in valid_posts if getattr(r, "sentiment_source", "rules") == "llm"]
-    sentiment_counts = {name: sum(getattr(r, "sentiment_label", "neutral") == name for r in llm_posts)
-                        for name in ("fear", "greed", "neutral", "mixed")}
-    position_counts = {name: sum(getattr(r, "position_status", "unknown") == name for r in llm_posts)
-                       for name in ("none", "holding", "trapped", "exited", "unknown")}
-    outlook_counts = {name: sum(getattr(r, "market_outlook", "unknown") == name for r in llm_posts)
-                      for name in ("bullish", "bearish", "sideways", "unknown")}
-    sentiment_weight = sum(max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1) for r in llm_posts)
-    market_sentiment_index = round(
-        sum(float(getattr(r, "sentiment_score", 0) or 0) * max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1)
-            for r in llm_posts) / max(sentiment_weight, 1) * 100,
-        1,
-    )
-    known_positions = sum(position_counts[name] for name in ("none", "holding", "trapped", "exited"))
-    known_outlooks = sum(outlook_counts[name] for name in ("bullish", "bearish", "sideways"))
-    outlook_index = round(
-        (outlook_counts["bullish"] - outlook_counts["bearish"]) / max(known_outlooks, 1) * 100,
-        1,
-    )
+    llm_profile = _compute_llm_profile(valid_posts)
 
     summary = _compute_summary_metrics(valid_posts)
     index = summary["index"]
@@ -92,6 +105,7 @@ def compute_sector_index(analysis_results: List) -> Dict:
             "mom_buy_index": platform_summary["mom_buy_index"],
             "mom_sell_index": platform_summary["mom_sell_index"],
             "buy_sell_ratio": platform_summary["buy_sell_ratio"],
+            "llm_profile": _compute_llm_profile(items),
         }
         platform_indices.append(platform_summary["index"])
 
@@ -120,23 +134,7 @@ def compute_sector_index(analysis_results: List) -> Dict:
             "source_counts": source_counts,
             "platform_breakdown": platform_breakdown,
             "platform_divergence": platform_divergence,
-            "llm_profile": {
-                "analyzed_posts": len(llm_posts),
-                "coverage_ratio": round(len(llm_posts) / max(len(valid_posts), 1) * 100, 1),
-                "sentiment": sentiment_counts,
-                "position": position_counts,
-                "outlook": outlook_counts,
-                "market_sentiment_index": market_sentiment_index,
-                "outlook_index": outlook_index,
-                "known_position_posts": known_positions,
-                "known_outlook_posts": known_outlooks,
-                "holding_ratio": round(position_counts["holding"] / max(known_positions, 1) * 100, 1),
-                "trapped_ratio": round(position_counts["trapped"] / max(known_positions, 1) * 100, 1),
-                "none_ratio": round(position_counts["none"] / max(known_positions, 1) * 100, 1),
-                "exited_ratio": round(position_counts["exited"] / max(known_positions, 1) * 100, 1),
-                "bullish_ratio": round(outlook_counts["bullish"] / max(known_outlooks, 1) * 100, 1),
-                "bearish_ratio": round(outlook_counts["bearish"] / max(known_outlooks, 1) * 100, 1),
-            },
+            "llm_profile": llm_profile,
         },
         "top_newbie_posts": [
             {
