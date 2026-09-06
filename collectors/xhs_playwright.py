@@ -398,8 +398,8 @@ async def _click_first_visible(page, selectors: List[str], timeout_ms: int = 200
 
 
 async def _switch_to_latest_sort(page) -> bool:
-    """切换并确认“最新”筛选；绝不点击帖子正文中的同名文本。"""
-    result = await page.evaluate(
+    """打开右侧筛选抽屉，并选择“排序依据 -> 最新”。"""
+    opened = await page.evaluate(
         r"""
         () => {
           const visible = (el) => {
@@ -407,25 +407,19 @@ async def _switch_to_latest_sort(page) -> bool:
             const style = getComputedStyle(el);
             return rect.width >= 8 && rect.height >= 8 && style.display !== 'none' && style.visibility !== 'hidden';
           };
-          const exactText = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '').trim() === '最新';
-          const candidates = [...document.querySelectorAll('button, [role="button"], [role="tab"], li, a, span')];
+          const exactText = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
+          const visibleTexts = [...document.querySelectorAll('body *')]
+            .filter((el) => visible(el))
+            .map((el) => exactText(el));
+          if (visibleTexts.includes('排序依据') && visibleTexts.includes('最多点赞') && visibleTexts.includes('最多评论')) {
+            return true;
+          }
+          const candidates = [...document.querySelectorAll('button, [role="button"], a, div, span')];
           for (const node of candidates) {
-            if (!visible(node) || !exactText(node)) continue;
-            const target = node.closest('button, [role="button"], [role="tab"], li, a') || node;
-            const href = target.getAttribute('href') || '';
-            if (/\/(explore|user\/profile|discovery\/item)\//.test(href)) continue;
-            let scope = target;
-            let scoped = target.getAttribute('role') === 'tab';
-            for (let depth = 0; scope && depth < 6; depth += 1, scope = scope.parentElement) {
-              const cls = String(scope.className || '').toLowerCase();
-              const text = (scope.innerText || scope.textContent || '').replace(/\s+/g, '');
-              if (/(filter|sort|channel|search-tab|search-filter)/.test(cls) ||
-                  (text.includes('综合') && text.includes('最新'))) {
-                scoped = true;
-                break;
-              }
-            }
-            if (!scoped) continue;
+            if (!visible(node) || !['筛选', '已筛选'].includes(exactText(node))) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.left < window.innerWidth * 0.55 || rect.top > window.innerHeight * 0.45) continue;
+            const target = node.closest('button, [role="button"], a') || node;
             target.click();
             return true;
           }
@@ -433,24 +427,77 @@ async def _switch_to_latest_sort(page) -> bool:
         }
         """
     )
-    if not result:
+    if not opened:
         return False
-    await asyncio.sleep(1.8)
+    await asyncio.sleep(0.8)
+    clicked = await page.evaluate(
+        r"""
+        () => {
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width >= 8 && rect.height >= 8 && style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const compact = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
+          const markers = [...document.querySelectorAll('body *')].filter((el) => visible(el) && compact(el) === '排序依据');
+          for (const marker of markers) {
+            let panel = marker.parentElement;
+            for (let depth = 0; panel && depth < 7; depth += 1, panel = panel.parentElement) {
+              const panelText = compact(panel);
+              if (!panelText.includes('最多点赞') || !panelText.includes('最多评论')) continue;
+              const latest = [...panel.querySelectorAll('button, [role="button"], li, div, span')]
+                .find((el) => visible(el) && compact(el) === '最新');
+              if (!latest) continue;
+              const target = latest.closest('button, [role="button"], li') || latest;
+              target.click();
+              return true;
+            }
+          }
+          return false;
+        }
+        """
+    )
+    if not clicked:
+        return False
+    await asyncio.sleep(1.5)
     html = await page.content()
     if not _is_search_page(page.url, html) or _is_home_feed(page.url, html):
         return False
     return await page.evaluate(
         r"""
-        () => [...document.querySelectorAll('button, [role="button"], [role="tab"], li, a, span')].some((node) => {
-          const text = (node.innerText || node.textContent || '').replace(/\s+/g, '').trim();
-          if (text !== '最新') return false;
-          const target = node.closest('button, [role="button"], [role="tab"], li, a') || node;
-          const classes = `${target.className || ''} ${target.parentElement?.className || ''}`.toLowerCase();
-          return target.getAttribute('aria-selected') === 'true' ||
-                 target.getAttribute('aria-current') === 'true' ||
-                 target.getAttribute('data-state') === 'active' ||
-                 /(^|\s)(active|selected|checked)(\s|$)/.test(classes);
-        })
+        () => {
+          const compact = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            return rect.width >= 8 && rect.height >= 8 && getComputedStyle(el).visibility !== 'hidden';
+          };
+          for (const marker of [...document.querySelectorAll('body *')]) {
+            if (!visible(marker) || compact(marker) !== '排序依据') continue;
+            let panel = marker.parentElement;
+            for (let depth = 0; panel && depth < 7; depth += 1, panel = panel.parentElement) {
+              if (!compact(panel).includes('最多点赞')) continue;
+              const choices = [...panel.querySelectorAll('button, [role="button"], li, div, span')];
+              const latest = choices.find((el) => visible(el) && compact(el) === '最新');
+              const general = choices.find((el) => visible(el) && compact(el) === '综合');
+              if (!latest) continue;
+              const target = latest.closest('button, [role="button"], li') || latest;
+              const classes = `${target.className || ''} ${target.parentElement?.className || ''}`.toLowerCase();
+              const explicit = target.getAttribute('aria-selected') === 'true' ||
+                target.getAttribute('aria-current') === 'true' ||
+                ['active', 'checked', 'selected'].includes(target.getAttribute('data-state')) ||
+                /(active|selected|checked)/.test(classes);
+              if (explicit) return true;
+              if (general) {
+                const latestStyle = getComputedStyle(latest);
+                const generalStyle = getComputedStyle(general);
+                if (latestStyle.color !== generalStyle.color ||
+                    latestStyle.backgroundColor !== generalStyle.backgroundColor ||
+                    latestStyle.fontWeight !== generalStyle.fontWeight) return true;
+              }
+            }
+          }
+          return false;
+        }
         """
     )
 
