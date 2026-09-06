@@ -41,11 +41,19 @@ def _api_key() -> str:
 
 
 def _base_url() -> str:
-    return (
+    # QWEN_BASE_URL is the server root (for example http://host:8080), while
+    # MOM_INDEX_LLM_BASE_URL keeps supporting an OpenAI-style /v1 base URL.
+    qwen_base_url = os.environ.get("QWEN_BASE_URL", "").strip()
+    if qwen_base_url:
+        return f"{qwen_base_url.rstrip('/')}/v1"
+    value = (
         os.environ.get("MOM_INDEX_LLM_BASE_URL", "").strip()
         or (ini_get_optional("llm", "base_url") or "").strip()
         or DEFAULT_BASE_URL
     ).rstrip("/")
+    if not re.match(r"^https?://", value, flags=re.I):
+        value = f"https://{value}"
+    return value
 
 
 def _model() -> str:
@@ -53,6 +61,28 @@ def _model() -> str:
         os.environ.get("MOM_INDEX_LLM_MODEL", "").strip()
         or (ini_get_optional("llm", "model") or "").strip()
         or DEFAULT_MODEL
+    )
+
+
+def llm_model_name() -> str:
+    """Return the exact configured model name for persistence and auditing."""
+    return _model()
+
+
+def llm_profile() -> str:
+    """Stable result namespace, for example mini-14b or macbook-27b."""
+    return (
+        os.environ.get("MOM_INDEX_LLM_PROFILE", "").strip()
+        or ini_get("llm", "profile", "default").strip()
+        or "default"
+    )
+
+
+def llm_prompt_version() -> str:
+    return (
+        os.environ.get("MOM_INDEX_LLM_PROMPT_VERSION", "").strip()
+        or ini_get("llm", "prompt_version", "sentiment-v1").strip()
+        or "sentiment-v1"
     )
 
 
@@ -64,12 +94,36 @@ def _max_chars() -> int:
     return int(os.environ.get("MOM_INDEX_LLM_MAX_CHARS", "") or ini_get_int("llm", "max_chars", 1200))
 
 
+def llm_max_posts_per_run() -> int:
+    raw = os.environ.get("MOM_INDEX_LLM_MAX_POSTS_PER_RUN", "")
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return max(0, ini_get_int("llm", "max_posts_per_run", 60))
+
+
+def llm_request_interval_seconds() -> float:
+    raw = os.environ.get("MOM_INDEX_LLM_REQUEST_INTERVAL_SECONDS", "")
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return max(0.0, ini_get_float("llm", "request_interval_seconds", 0.25))
+
+
 def _mode() -> str:
     return (
         os.environ.get("MOM_INDEX_LLM_MODE", "").strip().lower()
         or ini_get("llm", "mode", "uncertain").strip().lower()
         or "uncertain"
     )
+
+
+def llm_mode() -> str:
+    return _mode()
 
 
 def _request_reasoning() -> bool:
@@ -79,7 +133,8 @@ def _request_reasoning() -> bool:
 
 
 def llm_ready() -> bool:
-    return llm_sentiment_enabled() and bool(_api_key()) and bool(_model())
+    # llama-server does not require an API key by default.
+    return llm_sentiment_enabled() and bool(_model())
 
 
 def should_run_llm_second_pass(result: Any) -> bool:
@@ -119,6 +174,7 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
     payload = {
         "model": _model(),
         "temperature": 0.1,
+        "chat_template_kwargs": {"enable_thinking": False},
         "response_format": {"type": "json_object"},
         "messages": [
             {
@@ -148,12 +204,13 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         ],
     }
 
+    headers = {"Content-Type": "application/json"}
+    if _api_key():
+        headers["Authorization"] = f"Bearer {_api_key()}"
+
     resp = requests.post(
         f"{_base_url()}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         json=payload,
         timeout=_timeout_seconds(),
     )

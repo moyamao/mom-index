@@ -9,6 +9,12 @@
                          — Joseph Kennedy, 1929
 ```
 
+## 时效控制
+
+情绪指标默认使用最近 7 天且已识别发布时间的帖子；时间未知或未来时间不进入当期分析。发布时间统一为北京时间，MySQL 的 post_datetime 为北京时间 DATETIME，collected_at 单独记录采集时间。
+
+运行后访问 platform_trends.html，可按板块查看各平台每小时、每日、每周的情绪均值、变化、样本数和买卖帖数。历史来自 MySQL，同平台同板块同帖子采用最近一次分析，重复采集不重复计数；缺失时段不补零。旧数据的时间准确性取决于原采集记录，不能通过新代码自动还原。
+
 四个板块独立计算，每个板块有三个指标：
 
 | 指标 | 含义 |
@@ -90,6 +96,47 @@ cd frontend && python -m http.server 8765
 # 浏览器打开
 # http://localhost:8765/dashboard.html
 ```
+
+## 双机运行架构
+
+- Mac mini 是唯一采集节点：`[runtime] role=collector`、`allow_collection=true`，每天执行 `scripts/mom_index_job.sh`，使用 `mini-14b` 分析并写入 Mac mini MySQL。
+- MacBook 是按需分析节点：`[runtime] role=analyst`、`allow_collection=false`，只从同一个 MySQL 读取帖子；`scripts/analyze_mysql_posts.py` 不导入、也不会调用任何采集器。
+- 每条分析结果保存模型 profile、完整模型名、提示词版本、分析引擎、批次和正文哈希。14B 与 27B 不互相覆盖。
+- 指标按帖子北京时间发布时间归属；模型分析时间仅用于审计。模型对比只展示各自批次和覆盖率，不把未分析当成零。
+
+Mac mini 首次将配置关键词导入 MySQL：
+
+```bash
+python3 scripts/manage_keywords.py bootstrap
+python3 scripts/manage_keywords.py list
+```
+
+MacBook 启动 27B 服务后按需分析最近 7 天数据：
+
+```bash
+export QWEN_BASE_URL=http://127.0.0.1:8080
+export MOM_INDEX_LLM_MODEL='你的27B模型完整名称'
+python3 scripts/analyze_mysql_posts.py --days 7 --limit 1000
+```
+
+生产网页建议使用带关键词管理 API 的服务替代 `http.server`：
+
+```bash
+python3 scripts/web_server.py
+```
+
+访问 `dashboard.html` 查看模型批次概览，访问 `platform_trends.html` 按模型、平台和小时/日/周查看变化。关键词管理默认只读；写操作需在 `[keyword_admin]` 启用并设置 token。
+
+## 连接 Mac mini 上的 Qwen
+
+Qwen 地址优先从 `QWEN_BASE_URL` 读取。MacBook 通过 Tailscale 连接 Mac mini 时：
+
+```bash
+export QWEN_BASE_URL=http://100.83.225.31:8080
+python3 scripts/test_qwen_connection.py
+```
+
+在 Mac mini 本机运行时可不设置，测试脚本默认使用 `http://127.0.0.1:8080`。脚本会先请求 `/v1/models`，不可达时明确报错并停止；通过后再发送一条关闭 thinking 的 Chat Completions 请求。
 
 ## 提交与部署建议
 
@@ -261,6 +308,12 @@ python3 pipeline.py
 ```
 
 半导体相关关键词已经补充了 `存储`、`海力士`，会一起进入微博/小红书检索。
+
+### 关键词管理
+
+所有平台只维护本机 `conf/config.ini` 的一个 `[keywords]` 段落。每个板块一行、逗号分隔；
+小红书、微博、雪球搜索，微信群文章归类和跨板块去重都会使用同一套词表。修改后下次运行
+`pipeline.py` 自动生效，无需修改 Python 代码。
 
 ## 雪球数据源
 

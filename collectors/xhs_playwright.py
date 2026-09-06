@@ -15,6 +15,8 @@ from typing import Dict, List, Optional, Tuple
 
 from .anti_detection import get_anti_detection
 from runtime_config import ini_get_bool, ini_get_float, ini_get_int
+from keyword_config import get_keywords
+from post_time import normalize_social_datetime
 
 try:
     from playwright.async_api import async_playwright
@@ -25,27 +27,8 @@ except ImportError:  # pragma: no cover - 运行时依赖
 
 _ad = get_anti_detection()
 
-SEARCH_KEYWORDS = {
-    "nasdaq": ["美股怎么买", "纳斯达克新手", "纳指还能买吗", "买美股"],
-    "gold": ["黄金怎么买", "买黄金亏了", "黄金新手", "黄金还能涨吗"],
-    "cpo": ["CPO还能买吗", "光模块还能涨吗", "通信ETF", "算力牛市"],
-    "semiconductor": ["芯片还能买吗", "半导体新手", "半导体ETF", "AI芯片"],
-    "storage": [
-        "存储芯片还能买吗", "海力士还能买吗", "SK海力士", "HBM是什么", "美光还能买吗",
-        "三星存储", "长鑫存储概念股", "兆易创新还能买吗", "西部数据", "闪迪",
-    ],
-}
-
-SECTOR_HINTS = {
-    "nasdaq": ["纳指", "纳斯达克", "美股", "标普", "科技股", "英伟达", "特斯拉", "苹果", "etf"],
-    "gold": ["黄金", "金价", "金条", "金饰", "金豆", "纸黄金", "黄金etf", "现货黄金"],
-    "cpo": ["cpo", "光模块", "通信", "算力", "ai", "800g", "交换机", "服务器"],
-    "semiconductor": ["芯片", "半导体", "晶圆", "封测", "算力芯片", "gpu", "cpu", "eda"],
-    "storage": [
-        "存储", "存储芯片", "dram", "nand", "hbm", "海力士", "sk海力士", "美光",
-        "三星", "三星存储", "长鑫存储", "兆易创新", "西部数据", "闪迪", "ssd", "内存"
-    ],
-}
+SEARCH_KEYWORDS = get_keywords()
+SECTOR_HINTS = get_keywords()
 
 INVESTMENT_HINTS = [
     "etf", "基金", "股票", "a股", "港股", "美股", "买", "卖", "上车", "建仓", "加仓", "减仓",
@@ -302,7 +285,7 @@ def _is_relevant_xhs_post(post: Dict, sector: str, keyword: str) -> bool:
 
 async def _extract_posts_from_dom(page, keyword: str, limit: int) -> List[Dict]:
     """优先从页面 DOM 提取标题，兼容前端结构变化。"""
-    js = """
+    js = r"""
     (limit) => {
       const results = [];
       const seen = new Set();
@@ -323,7 +306,10 @@ async def _extract_posts_from_dom(page, keyword: str, limit: int) -> List[Dict]:
           const key = href + '|' + text;
           if (seen.has(key)) continue;
           seen.add(key);
-          results.push({ href, title: text });
+          const card = el.closest('section, [class*="note-item"], [class*="feed-item"], [class*="note-card"]') || el.parentElement;
+          const cardText = (card?.innerText || card?.textContent || '').trim().replace(/\s+/g, ' ');
+          const dateMatch = cardText.match(/(刚刚|\d+\s*(?:秒|分钟|小时)前|(?:今天|昨天)\s*\d{1,2}:\d{1,2}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{1,2})?|\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{1,2})?)/);
+          results.push({ href, title: text, date: dateMatch ? dateMatch[1] : '' });
           if (results.length >= limit) return results;
         }
       }
@@ -352,6 +338,8 @@ async def _extract_posts_from_dom(page, keyword: str, limit: int) -> List[Dict]:
                 "url": href,
                 "platform": "xiaohongshu",
                 "keyword": keyword,
+                "date": item.get("date", "").strip() or "未知",
+                "published_at": normalize_social_datetime(item.get("date", "")),
                 "collected_at": datetime.now().isoformat(),
             }
         )
@@ -407,6 +395,24 @@ async def _click_first_visible(page, selectors: List[str], timeout_ms: int = 200
         return True
     except Exception:
         return False
+
+
+async def _switch_to_latest_sort(page) -> bool:
+    """Select Xiaohongshu's newest-results filter when the current UI exposes it."""
+    clicked = await _click_first_visible(
+        page,
+        [
+            'button:has-text("最新")',
+            '[role="button"]:has-text("最新")',
+            '[role="tab"]:has-text("最新")',
+            'a:has-text("最新")',
+            'li:has-text("最新")',
+        ],
+        timeout_ms=2500,
+    )
+    if clicked:
+        await asyncio.sleep(1.5)
+    return clicked
 
 
 async def _navigate_via_search_ui(page, keyword: str, go_home: bool = True) -> None:
@@ -583,6 +589,7 @@ async def _enrich_xhs_posts_with_detail(detail_page, posts: List[Dict], keyword:
                 post["author"] = detail["author"].strip() or post.get("author", "")
             if detail.get("date"):
                 post["date"] = detail["date"].strip() or post.get("date", "")
+                post["published_at"] = normalize_social_datetime(post["date"])
             post["detail_fetched"] = True
             post["content_source"] = "detail_page"
         except Exception as e:
@@ -713,6 +720,11 @@ async def _search_xhs_on_page(page, keyword: str, limit: int = 10, reuse_page: b
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except PlaywrightTimeoutError:
             pass
+
+        if await _switch_to_latest_sort(page):
+            print(f"    [XHS] '{keyword}' 已切换最新排序")
+        else:
+            print(f"    ⚠️ [XHS] '{keyword}' 未找到最新排序，保留页面默认顺序")
 
         html = await page.content()
         debug_dir = _debug_dump_dir()

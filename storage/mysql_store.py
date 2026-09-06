@@ -19,10 +19,12 @@ import json
 import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+import hashlib
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional
 
 import pymysql
+from post_time import beijing_now
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -79,7 +81,10 @@ def _mysql_config() -> Dict:
 
 
 def _connect():
-    return pymysql.connect(**_mysql_config())
+    conn = pymysql.connect(**_mysql_config())
+    with conn.cursor() as cur:
+        cur.execute("SET time_zone = '+08:00'")
+    return conn
 
 
 def _column_exists(cur, table_name: str, column_name: str) -> bool:
@@ -137,6 +142,33 @@ def _ensure_tables(cur) -> None:
         )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS mom_index_analysis_batches (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            profile VARCHAR(64) NOT NULL,
+            model_name VARCHAR(255) NOT NULL,
+            prompt_version VARCHAR(64) NOT NULL,
+            machine_role VARCHAR(32) NOT NULL,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'running',
+            requested_posts INT NOT NULL DEFAULT 0,
+            analyzed_posts INT NOT NULL DEFAULT 0,
+            llm_posts INT NOT NULL DEFAULT 0,
+            failed_posts INT NOT NULL DEFAULT 0,
+            note VARCHAR(255) DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_analysis_batches_profile_time (profile, started_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
+    for column, definition in {
+        "llm_posts": "INT NOT NULL DEFAULT 0",
+        "failed_posts": "INT NOT NULL DEFAULT 0",
+    }.items():
+        if not _column_exists(cur, "mom_index_analysis_batches", column):
+            cur.execute(f"ALTER TABLE mom_index_analysis_batches ADD COLUMN {column} {definition}")
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS mom_index_analysis (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             run_id BIGINT UNSIGNED NOT NULL,
@@ -154,6 +186,12 @@ def _ensure_tables(cur) -> None:
             reasoning TEXT,
             matched_newbie_json TEXT,
             matched_pro_json TEXT,
+            batch_id BIGINT UNSIGNED NULL,
+            analysis_profile VARCHAR(64) NOT NULL DEFAULT 'legacy',
+            model_name VARCHAR(255) NOT NULL DEFAULT 'legacy',
+            prompt_version VARCHAR(64) NOT NULL DEFAULT 'legacy',
+            analysis_engine VARCHAR(16) NOT NULL DEFAULT 'rules',
+            content_hash CHAR(64) DEFAULT '',
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             KEY idx_mom_index_analysis_run_id (run_id),
             KEY idx_mom_index_analysis_sector (sector),
@@ -161,6 +199,17 @@ def _ensure_tables(cur) -> None:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
     )
+    analysis_columns = {
+        "batch_id": "BIGINT UNSIGNED NULL",
+        "analysis_profile": "VARCHAR(64) NOT NULL DEFAULT 'legacy'",
+        "model_name": "VARCHAR(255) NOT NULL DEFAULT 'legacy'",
+        "prompt_version": "VARCHAR(64) NOT NULL DEFAULT 'legacy'",
+        "analysis_engine": "VARCHAR(16) NOT NULL DEFAULT 'rules'",
+        "content_hash": "CHAR(64) DEFAULT ''",
+    }
+    for column, definition in analysis_columns.items():
+        if not _column_exists(cur, "mom_index_analysis", column):
+            cur.execute(f"ALTER TABLE mom_index_analysis ADD COLUMN {column} {definition}")
 
 
 def _insert_run(cur, dashboard: Dict, sector_indices: Dict, total_posts: int) -> int:
@@ -170,7 +219,7 @@ def _insert_run(cur, dashboard: Dict, sector_indices: Dict, total_posts: int) ->
         VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
             total_posts,
             len(sector_indices),
             "mom-index pipeline",
@@ -203,7 +252,17 @@ def _iter_post_rows(run_id: int, all_posts: Dict[str, List[Dict]]) -> Iterable[t
             )
 
 
-def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List]) -> Iterable[tuple]:
+def _content_hash(post: Dict) -> str:
+    payload = f"{post.get('title', '')}\n{post.get('content', '')}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_posts: Dict[str, List[Dict]], batch_id: int) -> Iterable[tuple]:
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
+    post_lookup = {
+        (sector, str(post.get("id", ""))): post
+        for sector, posts in all_posts.items() for post in posts
+    }
     for sector, results in analysis_results.items():
         for item in results:
             if item.platform == "xiaohongshu" and str(item.post_id).startswith("xhs_sim_"):
@@ -224,7 +283,32 @@ def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List]) -> Itera
                 item.reasoning,
                 json.dumps(item.matched_newbie, ensure_ascii=False),
                 json.dumps(item.matched_pro, ensure_ascii=False),
+                batch_id,
+                llm_profile(),
+                llm_model_name(),
+                llm_prompt_version(),
+                getattr(item, "sentiment_source", "rules") or "rules",
+                _content_hash(post_lookup.get((sector, str(item.post_id)), {})),
             )
+
+
+def _insert_analysis_batch(cur, analysis_results: Dict[str, List]) -> int:
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
+    requested = sum(len(items) for items in analysis_results.values())
+    llm_posts = sum(item.sentiment_source == "llm" for items in analysis_results.values() for item in items)
+    failed_posts = sum(bool(getattr(item, "llm_error", "")) for items in analysis_results.values() for item in items)
+    cur.execute(
+        """
+        INSERT INTO mom_index_analysis_batches (
+            profile, model_name, prompt_version, machine_role, started_at,
+            requested_posts, analyzed_posts, llm_posts, failed_posts, status, note
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'running', %s)
+        """,
+        (llm_profile(), llm_model_name(), llm_prompt_version(),
+         os.environ.get("MOM_INDEX_RUNTIME_ROLE", "collector"), beijing_now(),
+         requested, requested, llm_posts, failed_posts, "pipeline analysis"),
+    )
+    return int(cur.lastrowid)
 
 
 def persist_pipeline_run(
@@ -241,6 +325,7 @@ def persist_pipeline_run(
         with conn.cursor() as cur:
             _ensure_tables(cur)
             run_id = _insert_run(cur, dashboard, sector_indices, sum(len(v) for v in all_posts.values()))
+            batch_id = _insert_analysis_batch(cur, analysis_results)
 
             post_rows = list(_iter_post_rows(run_id, all_posts))
             if post_rows:
@@ -254,21 +339,126 @@ def persist_pipeline_run(
                     post_rows,
                 )
 
-            analysis_rows = list(_iter_analysis_rows(run_id, analysis_results))
+            analysis_rows = list(_iter_analysis_rows(run_id, analysis_results, all_posts, batch_id))
             if analysis_rows:
                 cur.executemany(
                     """
                     INSERT INTO mom_index_analysis (
                         run_id, sector, post_id, title, platform, newbie_score, newbie_confidence,
                         level, sentiment_score, intent, intent_strength, key_signals_json, reasoning,
-                        matched_newbie_json, matched_pro_json
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        matched_newbie_json, matched_pro_json, batch_id, analysis_profile,
+                        model_name, prompt_version, analysis_engine, content_hash
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s)
                     """,
                     analysis_rows,
                 )
+            cur.execute(
+                """UPDATE mom_index_analysis_batches
+                   SET status='completed', completed_at=%s, analyzed_posts=%s WHERE id=%s""",
+                (beijing_now(), len(analysis_rows), batch_id),
+            )
 
         conn.commit()
         return run_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List[Dict]]:
+    """Load one newest copy of each source post; never starts a collector."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            cur.execute(
+                """
+                SELECT p.run_id, p.sector, p.platform, p.source_mode, p.post_id AS id,
+                       p.title, p.content, p.url, p.author, p.post_date AS date,
+                       p.post_datetime AS published_at, p.collected_at, p.raw_json
+                FROM mom_index_posts p
+                INNER JOIN (
+                    SELECT platform, sector, post_id, MAX(id) AS newest_id
+                    FROM mom_index_posts
+                    WHERE post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                      AND post_id <> ''
+                    GROUP BY platform, sector, post_id
+                ) latest ON latest.newest_id = p.id
+                ORDER BY p.post_datetime DESC
+                LIMIT %s
+                """,
+                (max(1, days), max(1, limit)),
+            )
+            rows = cur.fetchall()
+        result: Dict[str, List[Dict]] = defaultdict(list)
+        for row in rows:
+            post = dict(row)
+            if isinstance(post.get("published_at"), datetime):
+                post["published_at"] = post["published_at"].strftime("%Y-%m-%d %H:%M:%S")
+            post.pop("raw_json", None)
+            result[post.pop("sector")].append(post)
+        return dict(result)
+    finally:
+        conn.close()
+
+
+def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[str, List[Dict]], note: str = "on-demand analysis") -> int:
+    """Persist an analysis-only batch while retaining each post's source run id."""
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            requested = sum(len(items) for items in analysis_results.values())
+            llm_posts = sum(item.sentiment_source == "llm" for items in analysis_results.values() for item in items)
+            failed_posts = sum(bool(getattr(item, "llm_error", "")) for items in analysis_results.values() for item in items)
+            cur.execute(
+                """INSERT INTO mom_index_analysis_batches
+                   (profile, model_name, prompt_version, machine_role, started_at,
+                    requested_posts, analyzed_posts, llm_posts, failed_posts, status, note)
+                   VALUES (%s,%s,%s,'analyst',%s,%s,0,%s,%s,'running',%s)""",
+                (llm_profile(), llm_model_name(), llm_prompt_version(), beijing_now(), requested,
+                 llm_posts, failed_posts, note),
+            )
+            batch_id = int(cur.lastrowid)
+            post_lookup = {
+                (sector, str(post.get("id", ""))): post
+                for sector, items in posts.items() for post in items
+            }
+            rows = []
+            for sector, results in analysis_results.items():
+                for item in results:
+                    post = post_lookup.get((sector, str(item.post_id)), {})
+                    rows.append((
+                        int(post.get("run_id") or 0), sector, item.post_id, item.title, item.platform,
+                        float(item.newbie_score), item.newbie_confidence, item.level,
+                        float(item.sentiment_score), item.intent, float(item.intent_strength),
+                        json.dumps(item.key_signals, ensure_ascii=False), item.reasoning,
+                        json.dumps(item.matched_newbie, ensure_ascii=False),
+                        json.dumps(item.matched_pro, ensure_ascii=False), batch_id, llm_profile(),
+                        llm_model_name(), llm_prompt_version(), item.sentiment_source,
+                        _content_hash(post),
+                    ))
+            if rows:
+                cur.executemany(
+                    """INSERT INTO mom_index_analysis
+                       (run_id,sector,post_id,title,platform,newbie_score,newbie_confidence,
+                        level,sentiment_score,intent,intent_strength,key_signals_json,reasoning,
+                        matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
+                        prompt_version,analysis_engine,content_hash)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    rows,
+                )
+            cur.execute(
+                """UPDATE mom_index_analysis_batches SET status='completed', completed_at=%s,
+                   analyzed_posts=%s WHERE id=%s""",
+                (beijing_now(), len(rows), batch_id),
+            )
+        conn.commit()
+        return batch_id
     except Exception:
         conn.rollback()
         raise
@@ -328,7 +518,7 @@ def _week_start(day: date) -> str:
     return monday.isoformat()
 
 
-def fetch_keyword_history() -> Dict[str, Dict]:
+def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
     """
     从 MySQL 回捞关键词历史，输出日线/周线。
     依赖 mom_index_posts.raw_json 里的 keyword 字段，以及 analysis 表里的情绪结果。
@@ -339,6 +529,10 @@ def fetch_keyword_history() -> Dict[str, Dict]:
     conn = _connect()
     try:
         with conn.cursor() as cur:
+            _ensure_tables(cur)
+            if not profile:
+                from analyzer.llm_sentiment import llm_profile
+                profile = llm_profile()
             cur.execute(
                 """
                 SELECT
@@ -358,8 +552,11 @@ def fetch_keyword_history() -> Dict[str, Dict]:
                     ON a.run_id = p.run_id
                    AND a.sector = p.sector
                    AND a.post_id = p.post_id
+                   AND a.platform = p.platform
+                WHERE a.analysis_profile = %s
                 ORDER BY p.post_datetime ASC, p.id ASC
-                """
+                """,
+                (profile,),
             )
             rows = cur.fetchall()
 
@@ -414,6 +611,7 @@ def fetch_keyword_history() -> Dict[str, Dict]:
                 reverse=True,
             )
             result[sector] = {
+                "analysis_profile": profile,
                 "keywords": sorted_keywords,
                 "daily": {},
                 "weekly": {},
@@ -448,5 +646,57 @@ def fetch_keyword_history() -> Dict[str, Dict]:
                 result[sector]["weekly"][keyword] = weekly_records
 
         return result
+    finally:
+        conn.close()
+
+
+def fetch_model_comparison() -> Dict:
+    """Return the newest completed batch per profile without mixing model coverage."""
+    if not mysql_enabled():
+        return {"profiles": []}
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            cur.execute(
+                """
+                SELECT b.id, b.profile, b.model_name, b.prompt_version, b.completed_at,
+                       b.requested_posts, b.analyzed_posts, b.llm_posts, b.failed_posts
+                FROM mom_index_analysis_batches b
+                INNER JOIN (
+                    SELECT profile, MAX(id) AS latest_id
+                    FROM mom_index_analysis_batches WHERE status='completed'
+                    GROUP BY profile
+                ) latest ON latest.latest_id=b.id
+                ORDER BY b.completed_at DESC
+                """
+            )
+            batches = cur.fetchall()
+            profiles = []
+            from analyzer.index_calculator import compute_sector_index
+            for batch in batches:
+                cur.execute(
+                    """SELECT sector, post_id, title, platform, newbie_score,
+                              newbie_confidence, level, sentiment_score, intent,
+                              intent_strength, reasoning
+                       FROM mom_index_analysis WHERE batch_id=%s""",
+                    (batch["id"],),
+                )
+                by_sector = defaultdict(list)
+                for row in cur.fetchall():
+                    by_sector[row["sector"]].append(_to_analysis_like(row))
+                completed = batch.get("completed_at")
+                profiles.append({
+                    "profile": batch["profile"],
+                    "model_name": batch["model_name"],
+                    "prompt_version": batch["prompt_version"],
+                    "completed_at": completed.strftime("%Y-%m-%d %H:%M:%S") if completed else "",
+                    "requested_posts": batch["requested_posts"],
+                    "analyzed_posts": batch["analyzed_posts"],
+                    "llm_posts": batch["llm_posts"],
+                    "failed_posts": batch["failed_posts"],
+                    "sectors": {sector: compute_sector_index(items) for sector, items in by_sector.items()},
+                })
+            return {"timezone": "Asia/Shanghai", "profiles": profiles}
     finally:
         conn.close()

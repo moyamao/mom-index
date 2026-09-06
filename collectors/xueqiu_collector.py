@@ -26,22 +26,14 @@ import requests
 from .anti_detection import get_anti_detection
 from .xueqiu_playwright import collect_keyword as collect_keyword_playwright, collect_all as collect_all_playwright
 from runtime_config import ini_get, ini_get_int
+from keyword_config import get_keywords
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 OUTPUT_FILE = os.path.join(DATA_DIR, "xueqiu_posts.json")
 DEFAULT_CONFIG_FILE = os.path.join(PROJECT_ROOT, "conf", "config.ini")
 
-SEARCH_KEYWORDS = {
-    "nasdaq": ["纳指还能买吗", "纳指ETF", "美股定投", "买美股"],
-    "gold": ["黄金亏了", "黄金ETF", "黄金还能涨吗", "买黄金"],
-    "cpo": ["CPO还能买吗", "光模块还能涨吗", "通信ETF", "算力牛市"],
-    "semiconductor": ["芯片还能买吗", "半导体ETF", "半导体追高", "AI芯片"],
-    "storage": [
-        "存储", "存储芯片", "海力士", "SK海力士", "HBM", "美光", "三星", "三星存储",
-        "长鑫存储", "兆易创新", "西部数据", "闪迪",
-    ],
-}
+SEARCH_KEYWORDS = get_keywords()
 
 _ad = get_anti_detection()
 SEARCH_ENDPOINTS = [

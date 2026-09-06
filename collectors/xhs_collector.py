@@ -13,6 +13,7 @@ from typing import List, Dict, Optional
 
 from .xhs_playwright import collect_all as collect_all_playwright
 from runtime_config import ini_get
+from keyword_config import get_keywords
 
 # 配置: 在 https://rnote.dev/auth/register 注册后获取
 # 设置环境变量 RNODE_API_KEY 或直接填入
@@ -34,17 +35,7 @@ def _build_proxies() -> Optional[Dict[str, str]]:
 
 PROXY = _build_proxies()
 
-SEARCH_KEYWORDS = {
-    # 用小白的语言去搜，才能找到小白
-    "nasdaq":     ["美股怎么买", "纳斯达克新手", "纳指还能买吗", "买美股"],
-    "gold":       ["黄金怎么买", "买黄金亏了", "黄金新手", "黄金还能涨吗"],
-    "cpo":        ["CPO是什么", "光模块还能涨吗", "通信ETF"],
-    "semiconductor": ["芯片还能买吗", "半导体新手", "芯片ETF"],
-    "storage": [
-        "存储", "存储芯片", "海力士", "SK海力士", "HBM", "美光", "三星", "三星存储",
-        "长鑫存储", "兆易创新", "西部数据", "闪迪",
-    ],
-}
+SEARCH_KEYWORDS = get_keywords()
 
 
 def _session_dir() -> str:

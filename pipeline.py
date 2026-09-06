@@ -6,7 +6,7 @@ import sys
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 确保项目根目录在 path 中
 sys.path.insert(0, os.path.dirname(__file__))
@@ -20,17 +20,29 @@ from analyzer.llm_analyzer import analyze_all
 from analyzer.index_calculator import (
     compute_sector_index, add_record, get_dashboard_data, SECTOR_NAMES
 )
-from storage.mysql_store import mysql_enabled, persist_pipeline_run, fetch_keyword_history
+from storage.mysql_store import (
+    mysql_enabled, persist_pipeline_run, fetch_keyword_history, fetch_model_comparison,
+)
+from keyword_config import get_keywords
+from runtime_config import ini_get, ini_get_bool, ini_get_int
+from post_time import normalize_social_datetime, beijing_now
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-SECTOR_HINTS = {
-    "nasdaq": ["纳指", "纳斯达克", "美股", "标普", "美债", "科技股", "英伟达", "特斯拉", "苹果"],
-    "gold": ["黄金", "金价", "金条", "金豆", "纸黄金", "黄金etf", "现货黄金"],
-    "cpo": ["cpo", "光模块", "通信", "算力", "800g", "交换机", "服务器", "铜缆"],
-    "semiconductor": ["半导体", "芯片", "晶圆", "封测", "gpu", "cpu", "eda", "设备材料"],
-    "storage": ["存储", "存储芯片", "dram", "nand", "hbm", "海力士", "sk海力士", "美光", "三星存储", "长鑫存储", "兆易创新", "西部数据", "闪迪"],
-}
+SECTOR_HINTS = get_keywords()
+
+
+def _assert_collection_role() -> None:
+    role = os.environ.get("MOM_INDEX_RUNTIME_ROLE", "").strip() or ini_get("runtime", "role", "analyst")
+    allowed_env = os.environ.get("MOM_INDEX_ALLOW_COLLECTION", "").strip().lower()
+    allowed = allowed_env in {"1", "true", "yes", "on"} if allowed_env else ini_get_bool(
+        "runtime", "allow_collection", False
+    )
+    if role != "collector" or not allowed:
+        raise RuntimeError(
+            "当前节点未授权采集。Mac mini 请在 config.ini 设置 [runtime] role=collector、"
+            "allow_collection=true；MacBook 保持 role=analyst。"
+        )
 
 
 def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
@@ -91,6 +103,7 @@ def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
                 "emotion_intensity": float(getattr(analysis, "emotion_intensity", 0) or 0),
                 "sentiment_confidence": float(getattr(analysis, "sentiment_confidence", 0) or 0),
                 "sentiment_source": getattr(analysis, "sentiment_source", "rules") or "rules",
+                "llm_error": getattr(analysis, "llm_error", "") or "",
                 "intent": getattr(analysis, "intent", "neutral") or "neutral",
                 "intent_strength": float(getattr(analysis, "intent_strength", 0) or 0),
                 "reasoning": getattr(analysis, "reasoning", "") or "",
@@ -221,8 +234,47 @@ def _deconflict_cross_sector_posts(all_posts: dict) -> dict:
     return result
 
 
+def _filter_recent_posts(all_posts: dict) -> dict:
+    """Keep current sentiment samples while retaining timestamp-unknown posts safely."""
+    max_age_days = max(1, ini_get_int("recency", "max_age_days", 7))
+    now = beijing_now()
+    cutoff = now - timedelta(days=max_age_days)
+    filtered_posts = {}
+
+    for sector, posts in all_posts.items():
+        kept = []
+        expired = 0
+        unknown_time = 0
+        for post in posts:
+            collected = normalize_social_datetime(post.get("collected_at")) or now.isoformat(sep=" ")
+            post["collected_at"] = collected
+            raw_time = normalize_social_datetime(post.get("published_at"), datetime.fromisoformat(collected))
+            post["published_at"] = raw_time
+            post["time_zone"] = "Asia/Shanghai"
+            try:
+                published_at = datetime.fromisoformat(raw_time) if raw_time else None
+            except ValueError:
+                published_at = None
+
+            if published_at is None:
+                unknown_time += 1
+            elif cutoff <= published_at <= now:
+                kept.append(post)
+            else:
+                expired += 1
+
+        if expired:
+            print(f"  [时效-{sector}] 去掉 {expired} 条超过 {max_age_days} 天的帖子")
+        if unknown_time:
+            print(f"  [时效-{sector}] {unknown_time} 条未识别发布时间，排除当期分析")
+        kept.sort(key=lambda post: post["published_at"], reverse=True)
+        filtered_posts[sector] = kept
+    return filtered_posts
+
+
 def run_pipeline():
     """执行完整的数据采集→分析→指数计算流程"""
+    _assert_collection_role()
     print("=" * 65)
     print("   👩‍👧 宝妈指数 · 数据采集与分析")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -287,6 +339,7 @@ def run_pipeline():
 
     all_posts = _deconflict_cross_sector_posts(all_posts)
     all_posts = _dedupe_posts_by_title(all_posts)
+    all_posts = _filter_recent_posts(all_posts)
     
     total_collected = sum(len(v) for v in all_posts.values())
     print(f"\n  共采集 {total_collected} 条帖子\n")
@@ -314,13 +367,21 @@ def run_pipeline():
         name = SECTOR_NAMES.get(sector, sector)
         d = result["details"]
         bar = "█" * int(result["index"] / 5) + "░" * (20 - int(result["index"] / 5))
-        print(f"  {name:6s} {bar} {result['index']:5.1f}  [{d['newbie_posts']}/{d['total_posts']}小白, {d['newbie_ratio']}%]")
+        print(f"  {name:6s} {bar} {result['index']:5.1f}  [{d.get('newbie_posts', 0)}/{d.get('total_posts', 0)}小白, {d.get('newbie_ratio', 0)}%]")
     
     # ===== 第4步: 存储历史 =====
     print("\n💾 第4步: 存储历史记录")
     add_record(sector_indices, analysis_results)
     
     dashboard = get_dashboard_data()
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
+    dashboard["analysis_identity"] = {
+        "profile": llm_profile(),
+        "model_name": llm_model_name(),
+        "prompt_version": llm_prompt_version(),
+        "runtime_role": os.environ.get("MOM_INDEX_RUNTIME_ROLE", "").strip()
+        or ini_get("runtime", "role", "analyst"),
+    }
     dashboard["history_latest"] = dashboard.get("latest")
     dashboard["latest"] = _build_current_snapshot(sector_indices)
 
@@ -342,6 +403,17 @@ def run_pipeline():
         dashboard["keyword_history"] = {}
 
     post_detail_dataset = _build_post_detail_dataset(all_posts, analysis_results)
+    from analyzer.platform_trends import fetch_platform_trends
+    try:
+        dashboard["platform_sentiment_trends"] = fetch_platform_trends()
+    except Exception as exc:
+        dashboard["platform_sentiment_trends"] = {"series": [], "note": "平台历史读取失败"}
+        print(f"  平台情绪历史读取失败: {exc}")
+    try:
+        dashboard["model_comparison"] = fetch_model_comparison() if mysql_enabled() else {"profiles": []}
+    except Exception as exc:
+        dashboard["model_comparison"] = {"profiles": [], "note": str(exc)}
+        print(f"  模型结果读取失败: {exc}")
 
     os.makedirs(DATA_DIR, exist_ok=True)
     dashboard_file = os.path.join(DATA_DIR, "dashboard_data.json")

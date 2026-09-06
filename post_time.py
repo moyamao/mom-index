@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+BEIJING = timezone(timedelta(hours=8))
+
+
+def beijing_now() -> datetime:
+    return datetime.now(BEIJING).replace(tzinfo=None)
 
 
 def normalize_social_datetime(raw_value: object, now: datetime | None = None) -> str:
@@ -10,7 +16,16 @@ def normalize_social_datetime(raw_value: object, now: datetime | None = None) ->
     if not raw or raw == "未知":
         return ""
 
-    now = now or datetime.now()
+    now = now or beijing_now()
+    if now.tzinfo:
+        now = now.astimezone(BEIJING).replace(tzinfo=None)
+    try:
+        value = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if value.tzinfo:
+            value = value.astimezone(BEIJING).replace(tzinfo=None)
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        pass
     if "刚刚" in raw:
         return now.strftime("%Y-%m-%d %H:%M:%S")
 

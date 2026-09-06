@@ -21,5 +21,6 @@ LOG_FILE="logs/mom_index_job_${TIMESTAMP}.log"
 
   export PYTHONDONTWRITEBYTECODE=1
 
-  "$PYTHON_BIN" pipeline.py
+  # 管道交给 tee 后，显式关闭 Python 输出缓冲，终端可实时看到采集进度。
+  "$PYTHON_BIN" -u pipeline.py
 } 2>&1 | tee "$LOG_FILE"

@@ -50,6 +50,13 @@ body {
   background: rgba(148,163,184,0.2);
 }
 .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
+.model-panel { background:#1e293b;border:1px solid #334155;border-radius:12px;padding:18px;margin-bottom:24px; }
+.model-panel h3 { margin-bottom:12px; }
+.model-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px; }
+.model-item { background:#172033;border:1px solid #334155;border-radius:10px;padding:12px; }
+.model-name { font-weight:700;color:#f8fafc; }
+.model-meta { color:#94a3b8;font-size:12px;margin-top:5px;line-height:1.5; }
+.model-sectors { color:#cbd5e1;font-size:12px;margin-top:8px;line-height:1.7; }
 
 /* 指数卡片网格 */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 32px; }
@@ -407,12 +414,19 @@ body {
     <a class="jump-link" href="#sector-charts">查看板块曲线</a>
     <a class="jump-link" href="#keyword-panel">查看关键词日线 / 周线</a>
     <a class="jump-link" href="posts.html">查看帖子明细</a>
+    <a class="jump-link" href="platform_trends.html">查看分平台/模型趋势</a>
+    <a class="jump-link" href="keywords.html">管理关键词</a>
   </div>
 </div>
 
 <div class="container">
   <!-- 各板块指数卡片 -->
   <div class="cards" id="cards"></div>
+
+  <div class="model-panel" id="model-panel">
+    <h3>模型分析结果</h3>
+    <div class="model-grid" id="model-grid"><div class="loading">暂无模型批次</div></div>
+  </div>
 
   <!-- 图例 -->
   <div class="legend">
@@ -581,6 +595,31 @@ function renderCards(data) {
       </div>
     `;
   }).join('');
+}
+
+function renderModelComparison(data) {
+  const grid = document.getElementById('model-grid');
+  const profiles = data.model_comparison?.profiles || [];
+  grid.replaceChildren();
+  if (!profiles.length) {
+    grid.textContent = '暂无可比较的模型批次，升级后完成一次分析即可生成。';
+    return;
+  }
+  profiles.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'model-item';
+    const title = document.createElement('div');
+    title.className = 'model-name';
+    title.textContent = `${item.profile} · ${item.model_name}`;
+    const meta = document.createElement('div');
+    meta.className = 'model-meta';
+    meta.textContent = `${item.completed_at || '-'} · 总样本 ${item.analyzed_posts}/${item.requested_posts} · LLM ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 提示词 ${item.prompt_version}`;
+    const sectors = document.createElement('div');
+    sectors.className = 'model-sectors';
+    sectors.textContent = Object.entries(item.sectors || {}).map(([key, value]) => `${SECTOR_NAMES[key] || key} ${value.index}`).join('　');
+    card.append(title, meta, sectors);
+    grid.append(card);
+  });
 }
 
 function renderCharts(data) {
@@ -1089,6 +1128,7 @@ fetch('data/dashboard_data.json')
   .then(r => r.json())
   .then(data => {
     renderCards(data);
+    renderModelComparison(data);
     renderCharts(data);
     renderKeywordHistory(data);
     renderTopPosts(data);

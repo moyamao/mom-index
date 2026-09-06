@@ -11,17 +11,12 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from runtime_config import ini_get, ini_get_bool, ini_get_int
+from keyword_config import get_keywords
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EXPORT_DIR = PROJECT_ROOT / "private" / "wechat_exports"
 SUPPORTED_SUFFIXES = {".json", ".jsonl", ".csv", ".txt"}
-SECTOR_KEYWORDS = {
-    "nasdaq": ["纳指", "纳斯达克", "美股", "标普", "英伟达", "特斯拉", "苹果"],
-    "gold": ["黄金", "金价", "金条", "金豆", "纸黄金", "黄金etf"],
-    "cpo": ["cpo", "光模块", "通信", "算力", "800g", "交换机", "服务器", "铜缆"],
-    "semiconductor": ["半导体", "芯片", "晶圆", "封测", "gpu", "cpu", "eda"],
-    "storage": ["存储", "dram", "nand", "hbm", "海力士", "美光", "长鑫", "兆易创新", "闪迪"],
-}
+SECTOR_KEYWORDS = get_keywords()
 
 
 def wechat_enabled() -> bool:

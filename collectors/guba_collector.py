@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 
 from .anti_detection import get_anti_detection
+from post_time import normalize_social_datetime
 
 SECTORS = {
     "nasdaq":     {"name": "纳斯达克", "code": "of159941", "etf": "513100"},
@@ -84,6 +85,7 @@ def parse_posts(html_content: str) -> List[Dict]:
         title = html_mod.unescape(title.strip())
         if not title or title == '点击开始搜索':
             continue
+        date_text = dates[i].strip() if i < len(dates) else "未知"
         posts.append({
             "id": f"guba_{url.split(',')[-1].replace('.html','')}",
             "title": title,
@@ -92,7 +94,8 @@ def parse_posts(html_content: str) -> List[Dict]:
             "author": authors[i].strip() if i < len(authors) else "未知",
             "reads": reads[i].strip() if i < len(reads) else "0",
             "replies": replies[i].strip() if i < len(replies) else "0",
-            "date": dates[i].strip() if i < len(dates) else "未知",
+            "date": date_text,
+            "published_at": normalize_social_datetime(date_text),
             "collected_at": datetime.now().isoformat(),
         })
     return posts

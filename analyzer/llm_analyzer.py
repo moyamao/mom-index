@@ -7,8 +7,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import json
 import re
+import time
 
-from .llm_sentiment import analyze_sentiment_with_llm, should_run_llm_second_pass
+from .llm_sentiment import (
+    analyze_sentiment_with_llm,
+    llm_max_posts_per_run,
+    llm_ready,
+    llm_request_interval_seconds,
+    should_run_llm_second_pass,
+    llm_model_name,
+    llm_profile,
+    llm_prompt_version,
+    llm_mode,
+)
 
 # ============================================================
 # 信号定义库
@@ -177,6 +188,7 @@ class AnalysisResult:
     emotion_intensity: float = 0.0    # 0~1 情绪强度
     sentiment_confidence: float = 0.0 # 0~1 置信度
     sentiment_source: str = "rules"   # rules / llm
+    llm_error: str = ""
     intent: str = "neutral"     # buy/sell/neutral — 买入/卖出意图
     intent_strength: float = 0  # 0~1 意图强度
     
@@ -184,6 +196,9 @@ class AnalysisResult:
     key_signals: List[str] = field(default_factory=list)
     source_date: str = ""
     source_datetime: str = ""
+    analysis_profile: str = "rules"
+    model_name: str = "rules-v1"
+    prompt_version: str = "rules-v1"
 
 
 def _normalize_post_datetime(post: Dict) -> tuple[str, str]:
@@ -231,7 +246,7 @@ def _normalize_post_datetime(post: Dict) -> tuple[str, str]:
     return fallback[:10], fallback
 
 
-def analyze_post(post: Dict, sector: str) -> AnalysisResult:
+def analyze_post(post: Dict, sector: str, run_llm_second_pass: bool = True) -> AnalysisResult:
     """分析单条帖子，返回详细判定"""
     title = post.get("title", "")
     content = post.get("content", "")
@@ -373,29 +388,8 @@ def analyze_post(post: Dict, sector: str) -> AnalysisResult:
         result.intent_strength = 0
 
     # 8.5 LLM 二次判定：默认只处理规则不确定的样本
-    if should_run_llm_second_pass(result):
-        try:
-            llm_decision = analyze_sentiment_with_llm(
-                title=title,
-                content=content,
-                sector=sector,
-                platform=result.platform,
-                current_result=result,
-            )
-        except Exception as exc:
-            llm_decision = None
-            result.key_signals.append(f"LLM二判失败: {str(exc)[:80]}")
-
-        if llm_decision:
-            result.sentiment_score = llm_decision.sentiment_score
-            result.sentiment_label = llm_decision.sentiment_label
-            result.emotion_intensity = llm_decision.emotion_intensity
-            result.sentiment_confidence = llm_decision.confidence
-            result.sentiment_source = llm_decision.source
-            result.intent = llm_decision.intent
-            result.intent_strength = llm_decision.intent_strength
-            if llm_decision.reasoning:
-                result.reasoning += f" 情绪二判: {llm_decision.reasoning}"
+    if run_llm_second_pass and should_run_llm_second_pass(result):
+        _apply_llm_second_pass(result, post)
 
     # 9. 关键信号摘要（用于前端卡片）
     result.key_signals = []
@@ -407,6 +401,8 @@ def analyze_post(post: Dict, sector: str) -> AnalysisResult:
         result.key_signals.append(
             f"「LLM情绪」{result.sentiment_label} / 强度{result.emotion_intensity:.2f} / 意图{result.intent}"
         )
+    elif result.llm_error:
+        result.key_signals.append(f"「LLM二判失败」{result.llm_error[:100]}")
     
     result.matched_newbie = [(n, d, w) for n, d, w, _ in matched_newbie]
     result.matched_pro = [(n, d, w) for n, d, w, _ in matched_pro]
@@ -511,15 +507,66 @@ def _is_storage_info_post(title: str, content: str, sector: str) -> bool:
 # 批量分析
 # ============================================================
 
-def analyze_sector(posts: List[Dict], sector: str) -> List[AnalysisResult]:
+def _has_llm_review_cue(post: Dict) -> bool:
+    """Only spend an LLM call on a post that can affect investor sentiment."""
+    text = f"{post.get('title', '')} {post.get('content', '')}".lower()
+    cues = [
+        "怕", "慌", "恐慌", "瑟瑟发抖", "凉凉", "杀", "崩", "套", "亏", "割", "跌", "回本", "站岗",
+        "冲", "追", "上车", "梭哈", "发财", "麻袋装钱", "暴涨", "起飞", "牛市",
+        "买", "卖", "加仓", "减仓", "清仓", "抄底", "定投", "持仓", "要不要", "能不能", "还能",
+    ]
+    return any(cue in text for cue in cues)
+
+
+def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
+    try:
+        llm_decision = analyze_sentiment_with_llm(
+            title=result.title,
+            content=post.get("content", "") or "",
+            sector=result.sector,
+            platform=result.platform,
+            current_result=result,
+        )
+    except Exception as exc:
+        result.llm_error = str(exc)[:180]
+        return
+
+    if not llm_decision:
+        result.llm_error = "接口未返回可解析的 JSON 结果"
+        return
+
+    result.sentiment_score = llm_decision.sentiment_score
+    result.sentiment_label = llm_decision.sentiment_label
+    result.emotion_intensity = llm_decision.emotion_intensity
+    result.sentiment_confidence = llm_decision.confidence
+    result.sentiment_source = llm_decision.source
+    result.analysis_profile = llm_profile()
+    result.model_name = llm_model_name()
+    result.prompt_version = llm_prompt_version()
+    result.intent = llm_decision.intent
+    result.intent_strength = llm_decision.intent_strength
+    if llm_decision.reasoning:
+        result.reasoning += f" 情绪二判: {llm_decision.reasoning}"
+
+
+def _refresh_key_signals(result: AnalysisResult) -> None:
+    if result.sentiment_source == "llm":
+        result.key_signals.append(
+            f"「LLM情绪」{result.sentiment_label} / 强度{result.emotion_intensity:.2f} / 意图{result.intent}"
+        )
+    elif result.llm_error:
+        result.key_signals.append(f"「LLM二判失败」{result.llm_error[:100]}")
+
+
+def analyze_sector(posts: List[Dict], sector: str, sort_results: bool = True) -> List[AnalysisResult]:
     """分析一个板块的所有帖子"""
     results = []
     for post in posts:
-        result = analyze_post(post, sector)
+        result = analyze_post(post, sector, run_llm_second_pass=False)
         results.append(result)
     
-    # 按小白分数排序
-    results.sort(key=lambda r: r.newbie_score, reverse=True)
+    if sort_results:
+        results.sort(key=lambda r: r.newbie_score, reverse=True)
     return results
 
 
@@ -528,5 +575,39 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
     all_results = {}
     for sector, posts in sector_data.items():
         print(f"  分析 {sector}: {len(posts)} 条帖子...")
-        all_results[sector] = analyze_sector(posts, sector)
+        # LLM 二判需保持与原帖一一对应，全部处理完再按分数排序。
+        all_results[sector] = analyze_sector(posts, sector, sort_results=False)
+
+    if not llm_ready():
+        for results in all_results.values():
+            results.sort(key=lambda r: r.newbie_score, reverse=True)
+        return all_results
+
+    candidates = []
+    for sector, posts in sector_data.items():
+        for post, result in zip(posts, all_results[sector]):
+            if should_run_llm_second_pass(result) and (
+                llm_mode() == "all" or _has_llm_review_cue(post)
+            ):
+                candidates.append((result.source_datetime or result.source_date or "", sector, post, result))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    budget = llm_max_posts_per_run()
+    selected = candidates[:budget]
+    success = 0
+    failed = 0
+    interval = llm_request_interval_seconds()
+    for index, (_, _, post, result) in enumerate(selected):
+        _apply_llm_second_pass(result, post)
+        if result.sentiment_source == "llm":
+            success += 1
+        elif result.llm_error:
+            failed += 1
+        _refresh_key_signals(result)
+        if interval and index < len(selected) - 1:
+            time.sleep(interval)
+
+    print(f"  [LLM二判] 候选 {len(candidates)} 条，执行 {len(selected)} 条，成功 {success} 条，失败 {failed} 条")
+    for results in all_results.values():
+        results.sort(key=lambda r: r.newbie_score, reverse=True)
     return all_results
