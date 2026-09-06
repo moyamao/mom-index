@@ -50,6 +50,10 @@ OUTPUT_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "
 DEFAULT_SESSION_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".xhs_session")
 
 
+class XhsVerificationRequired(RuntimeError):
+    """XHS requires a human slider/captcha verification before more searches."""
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -145,6 +149,45 @@ def _detail_fetch_limit(default_limit: int) -> int:
 
 def _render_wait_seconds() -> float:
     return ini_get_float("xiaohongshu", "render_wait_seconds", 4.0)
+
+
+def _verification_wait_seconds() -> int:
+    raw = os.environ.get("XHS_VERIFICATION_WAIT_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return max(0, ini_get_int("xiaohongshu", "verification_wait_seconds", 180))
+
+
+def _is_verification_page(html: str) -> bool:
+    compact = re.sub(r"\s+", "", html or "")
+    markers = ("安全限制", "访问验证", "请完成验证", "拖动滑块", "300012")
+    return any(marker in compact for marker in markers)
+
+
+async def _wait_for_verification(page, keyword: str) -> bool:
+    html = await page.content()
+    if not _is_verification_page(html):
+        return False
+
+    wait_seconds = 0 if _headless() else _verification_wait_seconds()
+    if wait_seconds <= 0:
+        raise XhsVerificationRequired(f"XHS 需要人工滑块验证: {keyword}")
+
+    print(f"    ⛔ XHS 触发滑块验证: {keyword}")
+    print(f"    请在当前浏览器页面完成验证；最多等待 {wait_seconds} 秒，通过后自动继续。")
+    deadline = asyncio.get_running_loop().time() + wait_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(3)
+        if page.is_closed():
+            break
+        if not _is_verification_page(await page.content()):
+            print(f"    ✅ XHS 验证已通过，继续采集: {keyword}")
+            await asyncio.sleep(2)
+            return True
+    raise XhsVerificationRequired(f"XHS 滑块验证等待超时: {keyword}")
 
 
 def _detail_wait_seconds() -> float:
@@ -811,6 +854,8 @@ async def _search_xhs_on_page(page, keyword: str, limit: int = 10, reuse_page: b
         except PlaywrightTimeoutError:
             pass
 
+        await _wait_for_verification(page, keyword)
+
         if await _switch_to_latest_sort(page):
             print(f"    [XHS] '{keyword}' 已切换最新排序")
         else:
@@ -842,11 +887,15 @@ async def _search_xhs_on_page(page, keyword: str, limit: int = 10, reuse_page: b
 
         current_url = page.url
 
-        if "安全限制" in html or "验证" in html or "300012" in html:
-            print(f"    ⚠️ XHS 风控拦截: {keyword}")
-            if debug_dir:
-                print(f"    调试文件已保存到: {debug_dir}")
-            return posts
+        verification_cleared = await _wait_for_verification(page, keyword)
+        if verification_cleared:
+            if not await _switch_to_latest_sort(page):
+                print(f"    ⚠️ [XHS] '{keyword}' 验证后未确认最新排序，丢弃本次结果")
+                return []
+            print(f"    [XHS] '{keyword}' 验证后已重新确认最新排序")
+            await _wait_for_verification(page, keyword)
+        html = await page.content()
+        current_url = page.url
 
         if "登录" in html[:3000] and "手机号" in html[:3000]:
             print(f"    ⚠️ XHS 需要登录: {keyword}")
@@ -896,6 +945,8 @@ async def _search_xhs_on_page(page, keyword: str, limit: int = 10, reuse_page: b
         print(f"    '{keyword}' → {len(posts)}条")
         return posts
 
+    except XhsVerificationRequired:
+        raise
     except Exception as e:
         print(f"    ❌ {keyword}: {e}")
         return posts
@@ -950,6 +1001,7 @@ async def _collect_all_async() -> Dict[str, List[Dict]]:
         except Exception:
             pass
 
+        verification_blocked = False
         for sector_key, keywords in SEARCH_KEYWORDS.items():
             all_notes = []
             for kw in keywords:
@@ -965,6 +1017,11 @@ async def _collect_all_async() -> Dict[str, List[Dict]]:
                         print(f"    [XHS-{sector_key}] '{kw}' 过滤掉 {dropped} 条弱相关结果")
                     all_notes.extend(filtered_notes)
                     _ad.sleep_like_human("search")
+                except XhsVerificationRequired as e:
+                    print(f"  ⚠️ {e}")
+                    print("  ⚠️ 停止本轮剩余小红书关键词，避免连续请求加重风控；其他数据源继续。")
+                    verification_blocked = True
+                    break
                 except Exception as e:
                     print(f"  [XHS-{sector_key}] '{kw}' 失败: {e}")
                     try:
@@ -982,6 +1039,8 @@ async def _collect_all_async() -> Dict[str, List[Dict]]:
                 seen.add(dedupe_key)
                 unique.append(note)
             result[sector_key] = unique
+            if verification_blocked:
+                break
     finally:
         if browser is not None:
             await browser.close()
