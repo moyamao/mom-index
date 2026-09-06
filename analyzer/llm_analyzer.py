@@ -202,7 +202,7 @@ class AnalysisResult:
 
 
 def _normalize_post_datetime(post: Dict) -> tuple[str, str]:
-    """尽量统一帖子时间，优先真实发布时间，回退到采集时间。"""
+    """统一真实发布时间；采集时间不能冒充帖子发布时间。"""
     published_at = (post.get("published_at") or "").strip()
     if published_at:
         return published_at[:10], published_at
@@ -233,17 +233,7 @@ def _normalize_post_datetime(post: Dict) -> tuple[str, str]:
         except ValueError:
             continue
 
-    collected_at = (post.get("collected_at") or "").strip()
-    if collected_at:
-        try:
-            normalized = collected_at.replace("Z", "+00:00")
-            parsed = datetime.fromisoformat(normalized)
-            return parsed.strftime("%Y-%m-%d"), parsed.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            pass
-
-    fallback = now.strftime("%Y-%m-%d %H:%M:%S")
-    return fallback[:10], fallback
+    return "", ""
 
 
 def analyze_post(post: Dict, sector: str, run_llm_second_pass: bool = True) -> AnalysisResult:

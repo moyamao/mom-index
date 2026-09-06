@@ -675,8 +675,11 @@ async def _enrich_xhs_posts_with_detail(detail_page, posts: List[Dict], keyword:
             if detail.get("author"):
                 post["author"] = detail["author"].strip() or post.get("author", "")
             if detail.get("date"):
-                post["date"] = detail["date"].strip() or post.get("date", "")
-                post["published_at"] = normalize_social_datetime(post["date"])
+                detail_date = detail["date"].strip()
+                detail_published_at = normalize_social_datetime(detail_date)
+                if detail_published_at:
+                    post["date"] = detail_date
+                    post["published_at"] = detail_published_at
             post["detail_fetched"] = True
             post["content_source"] = "detail_page"
         except Exception as e:
