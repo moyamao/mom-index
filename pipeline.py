@@ -235,7 +235,7 @@ def _deconflict_cross_sector_posts(all_posts: dict) -> dict:
 
 
 def _filter_recent_posts(all_posts: dict) -> dict:
-    """Keep current sentiment samples while retaining timestamp-unknown posts safely."""
+    """只保留发布时间明确且处于时效窗口内的帖子。"""
     max_age_days = max(1, ini_get_int("recency", "max_age_days", 7))
     now = beijing_now()
     cutoff = now - timedelta(days=max_age_days)
@@ -245,6 +245,8 @@ def _filter_recent_posts(all_posts: dict) -> dict:
         kept = []
         expired = 0
         unknown_time = 0
+        unknown_by_platform = {}
+        expired_by_platform = {}
         for post in posts:
             collected = normalize_social_datetime(post.get("collected_at")) or now.isoformat(sep=" ")
             post["collected_at"] = collected
@@ -258,15 +260,21 @@ def _filter_recent_posts(all_posts: dict) -> dict:
 
             if published_at is None:
                 unknown_time += 1
+                platform = post.get("platform") or "unknown"
+                unknown_by_platform[platform] = unknown_by_platform.get(platform, 0) + 1
             elif cutoff <= published_at <= now:
                 kept.append(post)
             else:
                 expired += 1
+                platform = post.get("platform") or "unknown"
+                expired_by_platform[platform] = expired_by_platform.get(platform, 0) + 1
 
         if expired:
-            print(f"  [时效-{sector}] 去掉 {expired} 条超过 {max_age_days} 天的帖子")
+            detail = ", ".join(f"{name}={count}" for name, count in sorted(expired_by_platform.items()))
+            print(f"  [时效-{sector}] 去掉 {expired} 条超过 {max_age_days} 天的帖子 ({detail})")
         if unknown_time:
-            print(f"  [时效-{sector}] {unknown_time} 条未识别发布时间，排除当期分析")
+            detail = ", ".join(f"{name}={count}" for name, count in sorted(unknown_by_platform.items()))
+            print(f"  [时效-{sector}] {unknown_time} 条未识别发布时间，排除当期分析 ({detail})")
         kept.sort(key=lambda post: post["published_at"], reverse=True)
         filtered_posts[sector] = kept
     return filtered_posts

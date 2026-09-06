@@ -41,8 +41,8 @@ def _is_valid_board_html(html_text: str) -> bool:
 
 
 def fetch_board(code: str, retries: int = 3) -> str:
-    """获取股吧页面HTML — 使用反检测请求头"""
-    url = f"https://guba.eastmoney.com/list,{code}.html"
+    """获取按发帖时间排序的股吧列表，避免评论顶帖污染最新情绪。"""
+    url = f"https://guba.eastmoney.com/list,{code},f.html"
     last_error = None
     for attempt in range(1, retries + 1):
         try:
@@ -64,38 +64,49 @@ def fetch_board(code: str, retries: int = 3) -> str:
 
 
 def parse_posts(html_content: str) -> List[Dict]:
-    """解析帖子列表"""
-    title_pattern = re.compile(
-        r'<a[^>]*href="(/news,[^"]*)"[^>]*title="([^"]*)"[^>]*>',
-        re.DOTALL
+    """逐行解析帖子，兼容新版 ``span.l*`` 和旧版 ``cite.l*`` 结构。"""
+    row_pattern = re.compile(
+        r'<div[^>]*class="[^"]*articleh[^"]*"[^>]*>(.*?)</div>',
+        re.DOTALL | re.IGNORECASE,
     )
-    read_pattern = re.compile(r'<cite[^>]*class="[^"]*l1[^"]*"[^>]*>(.*?)</cite>', re.DOTALL)
-    reply_pattern = re.compile(r'<cite[^>]*class="[^"]*l2[^"]*"[^>]*>(.*?)</cite>', re.DOTALL)
-    author_pattern = re.compile(r'<cite[^>]*class="[^"]*l4[^"]*"[^>]*>.*?<a[^>]*>(.*?)</a>', re.DOTALL)
-    date_pattern = re.compile(r'<cite[^>]*class="[^"]*l5[^"]*"[^>]*>(.*?)</cite>', re.DOTALL)
 
-    titles = title_pattern.findall(html_content)
-    reads = read_pattern.findall(html_content)
-    replies = reply_pattern.findall(html_content)
-    authors = author_pattern.findall(html_content)
-    dates = date_pattern.findall(html_content)
+    def field(row: str, class_name: str) -> str:
+        match = re.search(
+            rf'<(?:span|cite)[^>]*class="[^"]*\b{class_name}\b[^"]*"[^>]*>(.*?)</(?:span|cite)>',
+            row,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        value = re.sub(r"<[^>]+>", "", match.group(1))
+        return html_mod.unescape(value).strip()
 
     posts = []
-    for i, (url, title) in enumerate(titles):
+    for row in row_pattern.findall(html_content):
+        title_match = re.search(
+            r'<a[^>]*href="(/news,[^"]*)"[^>]*title="([^"]*)"[^>]*>',
+            row,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if not title_match:
+            continue
+        url, title = title_match.groups()
         title = html_mod.unescape(title.strip())
         if not title or title == '点击开始搜索':
             continue
-        date_text = dates[i].strip() if i < len(dates) else "未知"
+        date_text = field(row, "l5") or "未知"
         posts.append({
             "id": f"guba_{url.split(',')[-1].replace('.html','')}",
             "title": title,
             "url": f"https://guba.eastmoney.com{url}",
             "platform": "guba",
-            "author": authors[i].strip() if i < len(authors) else "未知",
-            "reads": reads[i].strip() if i < len(reads) else "0",
-            "replies": replies[i].strip() if i < len(replies) else "0",
+            "author": field(row, "l4") or "未知",
+            "reads": field(row, "l1") or "0",
+            "replies": field(row, "l2") or "0",
             "date": date_text,
             "published_at": normalize_social_datetime(date_text),
+            "time_basis": "published_at",
+            "list_sort": "publish_time",
             "collected_at": datetime.now().isoformat(),
         })
     return posts
