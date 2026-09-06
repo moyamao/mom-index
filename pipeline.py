@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 # 确保项目根目录在 path 中
 sys.path.insert(0, os.path.dirname(__file__))
 
-from collectors.guba_collector import collect_all as collect_guba
 from collectors.xhs_collector import collect_all as collect_xhs
 from collectors.weibo_collector import collect_all as collect_weibo
 from collectors.xueqiu_collector import collect_all as collect_xueqiu, xueqiu_enabled
@@ -292,12 +291,6 @@ def run_pipeline():
     print("\n📡 第1步: 数据采集")
     
     all_posts = {}
-    
-    # 东方财富股吧
-    print("  [东方财富股吧]")
-    guba_data = collect_guba()
-    for sector, posts in guba_data.items():
-        all_posts[sector] = all_posts.get(sector, []) + posts
     
     # 小红书 (如果有API Key)
     print("  [小红书]")

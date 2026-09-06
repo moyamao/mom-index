@@ -64,7 +64,7 @@ mom-index/
 ├── sync_data.py                 # 数据同步脚本（data/ → frontend/data/）
 ├── collectors/
 │   ├── anti_detection.py        # 反检测核心：UA轮换+隐身+延迟
-│   ├── guba_collector.py        # 东方财富股吧采集（✅ 生产可用）
+│   ├── guba_collector.py        # 东方财富股吧采集（已停用，不进入主流程）
 │   ├── weibo_collector.py       # 微博公开搜索采集（🧪 实验性）
 │   ├── xhs_collector.py         # 小红书 rnote.dev API（⚠️ 需充值）
 │   └── xhs_playwright.py        # 小红书 Playwright 方案（⚠️ 需登录态）
@@ -220,7 +220,7 @@ python3 scripts/test_xhs_playwright.py "纳指还能买吗" 8
 
 | 数据源 | 状态 | 日采集量 | 说明 |
 |--------|------|----------|------|
-| 东方财富股吧 | ✅ 稳定 | ~307条 | 4个ETF吧，无需cookie，无风控 |
+| 东方财富股吧 | ⏸ 已停用 | 0 | 帖子质量不满足当前情绪分析要求，不进入主流程 |
 | 雪球 | 🧪 需 Cookie | 视关键词而定 | 搜索结果页/接口字段偶尔会变，建议带登录 Cookie |
 | 微博公开搜索 | 🧪 实验性 | 未知 | 公开网页搜索结果，可能有频控/验证码 |
 | 小红书 (rnote.dev) | ⚠️ 需充值 | 0 | 免费额度仅够一轮 |
