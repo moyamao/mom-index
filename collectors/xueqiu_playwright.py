@@ -400,7 +400,7 @@ async def _click_first_visible(page, selectors: List[str], timeout_ms: int = 250
 
 
 async def _current_sort_label(page) -> str:
-    """Read the visible sort control after its menu has closed."""
+    """Read the selected search sort tab, not the first visible option."""
     try:
         return await page.evaluate(
             """
@@ -410,10 +410,9 @@ async def _current_sort_label(page) -> str:
                 const box = node.getBoundingClientRect();
                 return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
               };
-              const nodes = Array.from(document.querySelectorAll('button, a, span, [role="button"], [class*="sort"]'));
+              const nodes = Array.from(document.querySelectorAll('.search__tab__tags__lt a.active'));
               for (const node of nodes) {
                 if (!visible(node)) continue;
-                if (node.closest('article, [role="menu"], [role="listbox"], ul, li')) continue;
                 const text = (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
                 if (/^(默认排序|最新|最新发布|最新讨论)$/.test(text)) return text;
               }
@@ -431,38 +430,20 @@ async def _switch_to_latest_sort(page) -> tuple[bool, str]:
     if before in {"最新", "最新发布", "最新讨论"}:
         return True, before
 
-    menu_opened = await _click_first_visible(
-        page,
-        [
-            ':text-is("默认排序")',
-            'button:has-text("默认排序")',
-            '[role="button"]:has-text("默认排序")',
-            'span:has-text("默认排序")',
-        ],
-        timeout_ms=2200,
-    )
-    if menu_opened:
-        await asyncio.sleep(0.5)
-
     latest_selected = await _click_first_visible(
         page,
         [
-            ':text-is("最新讨论")',
-            ':text-is("最新发布")',
-            ':text-is("最新")',
-            'button:has-text("最新发布")',
-            '[role="button"]:has-text("最新发布")',
-            'li:has-text("最新发布")',
-            'button:has-text("最新")',
-            '[role="button"]:has-text("最新")',
-            'li:has-text("最新")',
+            '.search__tab__tags__lt a[title="2"]:text-is("最新讨论")',
         ],
-        timeout_ms=2500,
+        timeout_ms=5000,
     )
     if latest_selected:
-        await asyncio.sleep(1.5)
-        # Close an open option list before checking the selected label.
-        await page.keyboard.press("Escape")
+        try:
+            await page.locator('.search__tab__tags__lt a.active[title="2"]').wait_for(
+                state="visible", timeout=5000
+            )
+        except PlaywrightTimeoutError:
+            return False, await _current_sort_label(page) or "未识别"
     after = await _current_sort_label(page)
     if latest_selected and after in {"最新", "最新发布", "最新讨论"}:
         return True, after
