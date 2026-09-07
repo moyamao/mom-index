@@ -1,7 +1,4 @@
-"""
-宝妈指数 — 主流程
-采集 → 分析 → 计算 → 存储 → 输出
-"""
+"""市场情绪监控主流程：采集、分析、聚合、存储和输出。"""
 import sys
 import os
 import json
@@ -108,6 +105,7 @@ def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
                 "intent_strength": float(getattr(analysis, "intent_strength", 0) or 0),
                 "position_status": getattr(analysis, "position_status", "unknown") or "unknown",
                 "market_outlook": getattr(analysis, "market_outlook", "unknown") or "unknown",
+                "content_type": getattr(analysis, "content_type", "opinion") or "opinion",
                 "reasoning": getattr(analysis, "reasoning", "") or "",
                 "key_signals": list(getattr(analysis, "key_signals", []) or []),
                 "source_date": getattr(analysis, "source_date", "") or "",
@@ -367,7 +365,7 @@ def run_pipeline():
     """执行完整的数据采集→分析→指数计算流程"""
     _assert_collection_role()
     print("=" * 65)
-    print("   👩‍👧 宝妈指数 · 数据采集与分析")
+    print("   市场情绪监控 · 数据采集与分析")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 65)
     
@@ -402,14 +400,9 @@ def run_pipeline():
     print("🧠 第2步: LLM 多维度分析")
     analysis_results = analyze_all(all_posts)
     
-    # 打印每个板块的 top 小白帖
     for sector, results in analysis_results.items():
-        top_newbie = [r for r in results if r.newbie_score >= 30][:3]
-        print(f"\n  [{SECTOR_NAMES.get(sector, sector)}] 共分析 {len(results)} 条")
-        if top_newbie:
-            print(f"  🔥 典型小白帖:")
-            for r in top_newbie:
-                print(f"     [{r.level} {r.newbie_score}分] {r.title[:50]}...")
+        news_count = sum(getattr(r, "content_type", "opinion") == "news" or r.level == "资讯帖" for r in results)
+        print(f"\n  [{SECTOR_NAMES.get(sector, sector)}] 共分析 {len(results)} 条，其中资讯 {news_count} 条")
     
     # ===== 第3步: 指数计算 =====
     print("\n📊 第3步: 指数计算")
@@ -421,8 +414,10 @@ def run_pipeline():
         sector_indices[sector] = result
         name = SECTOR_NAMES.get(sector, sector)
         d = result["details"]
-        bar = "█" * int(result["index"] / 5) + "░" * (20 - int(result["index"] / 5))
-        print(f"  {name:6s} {bar} {result['index']:5.1f}  [{d.get('newbie_posts', 0)}/{d.get('total_posts', 0)}小白, {d.get('newbie_ratio', 0)}%]")
+        print(
+            f"  {name:6s} 情绪 {result['index']:+6.1f}  "
+            f"[观点 {d.get('opinion_posts', 0)} / 资讯 {d.get('news_posts', 0)}]"
+        )
     
     # ===== 第4步: 存储历史 =====
     print("\n💾 第4步: 存储历史记录")
@@ -537,7 +532,7 @@ def generate_sample_history(days: int = 30):
             trend = 15 * math.sin(i / 10.0)  # 周期性波动
             noise = random.uniform(-8, 8)
             idx = round(base + trend + noise, 1)
-            idx = max(0, min(100, idx))
+            idx = max(-100, min(100, idx))
             
             record["sectors"][sector] = {
                 "index": idx,
@@ -545,16 +540,10 @@ def generate_sample_history(days: int = 30):
                 "details": {
                     "total_posts": random.randint(60, 85),
                     "valid_posts": random.randint(55, 80),
+                    "opinion_posts": random.randint(40, 70),
+                    "news_posts": random.randint(5, 20),
                     "spam_posts": random.randint(0, 5),
-                    "newbie_posts": random.randint(3, 25),
-                    "pure_newbie": random.randint(0, 5),
-                    "newbie_ratio": round(random.uniform(5, 35), 1),
-                    "avg_newbie_score": round(random.uniform(20, 50), 1),
-                    "avg_sentiment": round(random.uniform(20, 80), 1),
-                    "purity_signal": round(random.uniform(10, 60), 1),
-                    "activity": round(random.uniform(60, 100), 1),
                 },
-                "top_newbie_posts": [],
             }
         
         history["records"].append(record)

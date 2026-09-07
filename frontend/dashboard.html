@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>宝妈指数 · Mom Index</title>
+<title>市场情绪监控</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -363,7 +363,7 @@ body {
   gap: 8px;
 }
 
-/* Top 小白帖 */
+/* Legacy post summary styles */
 .top-posts {
   background: #1e293b;
   border: 1px solid #334155;
@@ -425,8 +425,8 @@ body {
 <body>
 
 <div class="header">
-  <h1>👩‍👧 宝妈指数</h1>
-  <div class="subtitle">当小白开始讨论投资，就是该警惕的时候</div>
+  <h1>市场情绪监控</h1>
+  <div class="subtitle">个人观点参与情绪、仓位与预期分析；资讯帖子只计数</div>
   <div class="subtitle" id="update-time" style="margin-top:4px"></div>
   <div class="header-links">
     <a class="jump-link" href="#sector-charts">查看板块曲线</a>
@@ -457,11 +457,11 @@ body {
 
   <!-- 历史曲线 -->
   <div class="charts" id="sector-charts">
-    <div class="chart-box"><h3>📈 纳斯达克 — 宝妈指数走势</h3><canvas id="chart-nasdaq"></canvas></div>
-    <div class="chart-box"><h3>🥇 黄金 — 宝妈指数走势</h3><canvas id="chart-gold"></canvas></div>
-    <div class="chart-box"><h3>🔌 CPO通信 — 宝妈指数走势</h3><canvas id="chart-cpo"></canvas></div>
-    <div class="chart-box"><h3>💾 半导体 — 宝妈指数走势</h3><canvas id="chart-semiconductor"></canvas></div>
-    <div class="chart-box"><h3>🧠 存储 — 宝妈指数走势</h3><canvas id="chart-storage"></canvas></div>
+    <div class="chart-box"><h3>纳斯达克 — 市场情绪走势</h3><canvas id="chart-nasdaq"></canvas></div>
+    <div class="chart-box"><h3>黄金 — 市场情绪走势</h3><canvas id="chart-gold"></canvas></div>
+    <div class="chart-box"><h3>CPO通信 — 市场情绪走势</h3><canvas id="chart-cpo"></canvas></div>
+    <div class="chart-box"><h3>半导体 — 市场情绪走势</h3><canvas id="chart-semiconductor"></canvas></div>
+    <div class="chart-box"><h3>存储 — 市场情绪走势</h3><canvas id="chart-storage"></canvas></div>
   </div>
 
   <div class="keyword-panel" id="keyword-panel">
@@ -471,16 +471,11 @@ body {
     <div class="keyword-stage" id="keyword-stage"></div>
   </div>
 
-  <!-- Top 小白帖 -->
-  <div class="top-posts" id="top-posts">
-    <h3>🔥 今日最"小白"的帖子</h3>
-    <div class="loading">加载中...</div>
-  </div>
 </div>
 
 <div class="footer">
-  宝妈指数 v1.0 — 数据来源: 东方财富股吧 · 小红书 · 抖音<br>
-  指数越高 = 小白越活跃 = 市场情绪越危险<br>
+  市场情绪监控 — 数据来源: 小红书 · 微博 · 雪球<br>
+  -100 = 恐慌 · 0 = 中性 · +100 = 贪婪；资讯帖仅计数<br>
   <span style="color:#64748b">⚠️ 仅供参考，不构成投资建议</span>
 </div>
 
@@ -511,20 +506,10 @@ const PLATFORM_NAMES = {
 
 let keywordCharts = [];
 
-function getSignalClass(idx) {
-  if (idx >= 75) return 'red';
-  if (idx >= 60) return 'orange';
-  if (idx >= 40) return 'yellow';
-  if (idx >= 20) return 'green';
-  return 'blue';
-}
-
 function getEmoji(idx) {
-  if (idx >= 75) return '🔴';
-  if (idx >= 60) return '🟠';
-  if (idx >= 40) return '🟡';
-  if (idx >= 20) return '🟢';
-  return '🔵';
+  if (idx >= 15) return '🔴';
+  if (idx <= -15) return '🟢';
+  return '⚪';
 }
 
 function dominantMetric(counts, labels, excluded = []) {
@@ -578,8 +563,6 @@ function renderCards(data) {
     const hasSentiment = Boolean(llm.has_sentiment_data ?? (llm.analyzed_posts > 0));
     const hasOutlook = Boolean(llm.has_outlook_data ?? (llm.known_outlook_posts > 0));
     const hasPosition = Boolean(llm.has_position_data ?? (llm.known_position_posts > 0));
-    const newbieParticipation = Number(d.newbie_participation_index ?? sector.index ?? 0);
-    const cls = getSignalClass(newbieParticipation);
     const totalSources = Object.values(sourceCounts).reduce((sum, value) => sum + value, 0);
     const sourceChips = Object.entries(sourceCounts)
       .sort((a, b) => b[1] - a[1])
@@ -608,7 +591,7 @@ function renderCards(data) {
             <span>预期 <b style="color:${hasPlatformOutlook ? directionColor(platformOutlook) : '#64748b'}">${hasPlatformOutlook ? `${platformOutlook > 0 ? '+' : ''}${platformOutlook}` : '样本不足'}</b></span>
             <span>持有 ${hasPlatformPosition ? `${profile.holding_ratio || 0}%` : '暂无'}</span>
             <span>被套 ${hasPlatformPosition ? `${profile.trapped_ratio || 0}%` : '暂无'}</span>
-            <span>新手热度 ${stats.newbie_participation_index ?? stats.index ?? 0}</span>
+            <span>观点 ${stats.valid_posts || 0}帖</span>
           </div>
         </div>
       `})
@@ -622,9 +605,9 @@ function renderCards(data) {
           <div class="caption">市场情绪指数<br>${hasSentiment ? directionLabel(sentimentIndex,'贪婪','恐慌') : 'LLM 样本不足'}</div>
         </div>
         <div class="index-label">-100 恐慌 · 0 中性 · +100 贪婪</div>
-        <div class="signal ${cls}">新手参与热度 ${newbieParticipation} · ${d.newbie_posts || 0}/${d.valid_posts || d.total_posts || 0}帖</div>
+        <div class="signal">观点 ${d.opinion_posts || 0}帖 · 资讯 ${d.news_posts || 0}帖（资讯不参与情绪）</div>
         <div class="delta-row">
-          <div class="delta-chip ${deltaClass}">旧宝妈指数较前一日 ${deltaLabel}</div>
+          <div class="delta-chip ${deltaClass}">情绪较前一日 ${deltaLabel}</div>
           <div style="color:#64748b;">历史兼容 · ${change.points || 0}点</div>
         </div>
         <!-- LLM 方向性核心指标 -->
@@ -644,13 +627,7 @@ function renderCards(data) {
           <span class="source-chip">空仓 ${hasPosition ? `${llm.none_ratio || 0}%` : '暂无'}</span>
         </div>
         <div class="detail-row">
-          <span>小白帖</span><span>${d.newbie_posts || 0}/${d.valid_posts || d.total_posts || 0} (${d.newbie_ratio || 0}%)</span>
-        </div>
-        <div class="detail-row">
-          <span>买卖比</span><span style="color:${(d.buy_sell_ratio||0)>1.5?'#f87171':(d.buy_sell_ratio||0)>0.8?'#facc15':'#4ade80'}">${d.buy_sell_ratio||0}:1 ${(d.buy_sell_ratio||0)>1.5?'🔥追涨':(d.buy_sell_ratio||0)>0.8?'⚖️平衡':'🩸恐慌'}</span>
-        </div>
-        <div class="detail-row">
-          <span>平台新手热度差</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
+          <span>平台情绪差</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
         </div>
         <div class="llm-profile">
           <div class="llm-metric"><span>情绪构成</span><strong>${sentimentText}</strong></div>
@@ -732,7 +709,7 @@ function renderCharts(data) {
             borderColor: '#334155',
             borderWidth: 1,
             callbacks: {
-              label: ctx => `宝妈指数: ${ctx.parsed.y}`,
+              label: ctx => `市场情绪: ${ctx.parsed.y}`,
               afterLabel: ctx => {
                 const prev = ctx.dataIndex > 0 ? records[ctx.dataIndex - 1] : null;
                 if (!prev) return '首个有效日期';
@@ -744,7 +721,7 @@ function renderCharts(data) {
         },
         scales: {
           y: {
-            min: 0, max: 100,
+            min: -100, max: 100,
             grid: { color: '#33415533' },
             ticks: { color: '#64748b', callback: v => v },
           },
@@ -758,48 +735,6 @@ function renderCharts(data) {
       }
     });
   });
-}
-
-function renderTopPosts(data) {
-  const container = document.getElementById('top-posts');
-  const latest = data.latest;
-  if (!latest) {
-    container.innerHTML += '<div class="loading">暂无数据</div>';
-    return;
-  }
-
-  // 从所有板块收集 top 小白帖
-  let allTop = [];
-  Object.entries(latest.sectors).forEach(([sector, sdata]) => {
-    (sdata.top_newbie_posts || []).forEach(p => {
-      allTop.push({ ...p, sector: SECTOR_NAMES[sector] });
-    });
-  });
-
-  // 按分数排序
-  allTop.sort((a, b) => b.score - a.score);
-  allTop = allTop.slice(0, 8);
-
-  if (!allTop.length) {
-    container.innerHTML += '<div class="loading">今日暂无典型小白帖</div>';
-    return;
-  }
-
-  const badgeClass = score => score >= 50 ? 'pure' : 'semi';
-  const badgeText = score => score >= 50 ? '纯小白' : '偏小白';
-
-  container.innerHTML += allTop.map(p => `
-  <div class="post-item">
-    <div class="post-title">
-      <span class="post-badge ${badgeClass(p.score)}">${badgeText(p.score)} ${p.score}分</span>
-      <span style="color:#64748b;font-size:11px">[${p.sector}]</span>
-      ${p.intent_label ? `<span style="font-size:11px;margin-left:4px">${p.intent_label}</span>` : ''}
-      ${p.title}
-    </div>
-    ${p.reasoning ? `<div class="post-reason">📝 ${p.reasoning}</div>` : ''}
-    ${p.key_signals ? p.key_signals.map(s => `<div class="post-meta">▸ ${s}</div>`).join('') : ''}
-  </div>
-  `).join('');
 }
 
 function buildKeywordChart(canvasId, color, records, labelKey) {
@@ -834,14 +769,14 @@ function buildKeywordChart(canvasId, color, records, labelKey) {
           borderColor: '#334155',
           borderWidth: 1,
           callbacks: {
-            label: ctx => `宝妈指数: ${ctx.parsed.y}`,
+            label: ctx => `市场情绪: ${ctx.parsed.y}`,
             afterLabel: ctx => `样本帖子: ${records[ctx.dataIndex]?.post_count || 0}`,
           }
         }
       },
       scales: {
         y: {
-          min: 0, max: 100,
+          min: -100, max: 100,
           grid: { color: '#33415533' },
           ticks: { color: '#64748b', maxTicksLimit: 4 },
         },
@@ -883,7 +818,7 @@ function buildKeywordCompareChart(canvasId, datasets, labels) {
       },
       scales: {
         y: {
-          min: 0, max: 100,
+          min: -100, max: 100,
           grid: { color: '#33415533' },
           ticks: { color: '#64748b', maxTicksLimit: 5 },
         },
@@ -919,7 +854,6 @@ function buildContinuousSeries(records, labelKey, stepDays) {
       [labelKey]: key,
       index: 0,
       post_count: 0,
-      newbie_posts: 0,
       synthetic: true,
     });
   }
@@ -963,14 +897,14 @@ function buildKeywordMiniChart(canvasId, color, records, labelKey, mode) {
           borderWidth: 1,
           callbacks: {
             title: items => items[0]?.label || '',
-            label: ctx => `宝妈指数: ${ctx.parsed.y}`,
+            label: ctx => `市场情绪: ${ctx.parsed.y}`,
             afterLabel: ctx => `样本帖子: ${series[ctx.dataIndex]?.post_count || 0}`,
           }
         },
       },
       scales: {
         y: {
-          min: 0,
+          min: -100,
           max: 100,
           display: false,
         },
@@ -1202,7 +1136,6 @@ fetch('data/dashboard_data.json')
     renderModelComparison(data);
     renderCharts(data);
     renderKeywordHistory(data);
-    renderTopPosts(data);
   })
   .catch(err => {
     document.getElementById('cards').innerHTML = 

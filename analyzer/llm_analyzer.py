@@ -201,6 +201,7 @@ class AnalysisResult:
     intent_strength: float = 0  # 0~1 意图强度
     position_status: str = "unknown"  # none/holding/trapped/exited/unknown
     market_outlook: str = "unknown"   # bullish/bearish/sideways/unknown
+    content_type: str = "opinion"     # opinion/news/spam
     
     # 用于前端展示
     key_signals: List[str] = field(default_factory=list)
@@ -280,6 +281,7 @@ def analyze_post(post: Dict, sector: str, run_llm_second_pass: bool = True) -> A
                 newbie_score=0,
                 newbie_confidence="high",
                 level="垃圾帖",
+                content_type="spam",
                 reasoning=f"检测到垃圾/活动帖（命中: 「{spam}」），已过滤，不计入指数。",
                 source_date=source_date,
                 source_datetime=source_datetime,
@@ -295,7 +297,8 @@ def analyze_post(post: Dict, sector: str, run_llm_second_pass: bool = True) -> A
             newbie_score=0,
             newbie_confidence="high",
             level="资讯帖",
-            reasoning="检测到偏产业梳理/名单/图谱类资讯帖，不计入宝妈指数。",
+            content_type="news",
+            reasoning="检测到偏产业梳理/名单/图谱类资讯帖，仅计数，不参与情绪分析。",
             source_date=source_date,
             source_datetime=source_datetime,
         )
@@ -523,6 +526,7 @@ def _has_llm_review_cue(post: Dict) -> bool:
         "怕", "慌", "恐慌", "瑟瑟发抖", "凉凉", "杀", "崩", "套", "亏", "割", "跌", "回本", "站岗",
         "冲", "追", "上车", "梭哈", "发财", "麻袋装钱", "暴涨", "起飞", "牛市",
         "买", "卖", "加仓", "减仓", "清仓", "抄底", "定投", "持仓", "要不要", "能不能", "还能",
+        "公告", "快讯", "研报", "报告", "数据显示", "发布", "同比", "环比", "获悉", "消息称",
     ]
     return any(cue in text for cue in cues)
 
@@ -556,9 +560,24 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
     result.intent_strength = llm_decision.intent_strength
     result.position_status = llm_decision.position_status
     result.market_outlook = llm_decision.market_outlook
+    result.content_type = llm_decision.content_type
+    result.key_signals = []
+    if result.content_type == "news":
+        result.sentiment_score = 0
+        result.sentiment_label = "neutral"
+        result.emotion_intensity = 0
+        result.intent = "neutral"
+        result.intent_strength = 0
+        result.position_status = "unknown"
+        result.market_outlook = "unknown"
+        result.newbie_score = 0
+        result.level = "资讯帖"
+        result.newbie_confidence = "high"
     maturity = llm_decision.investor_maturity
     maturity_confidence = llm_decision.maturity_confidence
-    if maturity == "not_applicable" and maturity_confidence >= 0.65:
+    if result.content_type == "news":
+        pass
+    elif maturity == "not_applicable" and maturity_confidence >= 0.65:
         result.newbie_score = 0
         result.level = "资讯帖"
         result.newbie_confidence = "high"
@@ -572,10 +591,7 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
         result.level = _newbie_level(result.newbie_score)
         result.newbie_confidence = "high" if maturity_confidence >= 0.8 else "medium"
     if llm_decision.reasoning:
-        result.reasoning += (
-            f" LLM二判: {llm_decision.reasoning}"
-            f" 投资者成熟度={maturity}({maturity_confidence:.2f})。"
-        )
+        result.reasoning = llm_decision.reasoning
 
 
 def _refresh_key_signals(result: AnalysisResult) -> None:

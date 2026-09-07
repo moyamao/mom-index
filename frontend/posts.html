@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>宝妈指数 · 帖子明细</title>
+<title>市场情绪监控 · 帖子明细</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -309,7 +309,7 @@ body {
         <select id="sector-filter"></select>
       </div>
       <div class="filter-item">
-        <label>等级</label>
+        <label>内容类型</label>
         <select id="level-filter"></select>
       </div>
       <div class="filter-item">
@@ -345,7 +345,7 @@ const SECTOR_NAMES = {
   storage: '存储',
 };
 
-const LEVEL_NAMES = ['纯小白', '偏小白', '中间派', '偏专业', '专业投资者', '资讯帖', '垃圾帖'];
+const CONTENT_TYPES = ['opinion', 'news', 'spam'];
 const INTENT_NAMES = {
   all: '全部',
   buy: '买入',
@@ -447,7 +447,7 @@ function currentFilters() {
   return {
     platform: el('platform-filter').value,
     sector: el('sector-filter').value,
-    level: el('level-filter').value,
+    contentType: el('level-filter').value,
     intent: el('intent-filter').value,
     q: el('search-input').value.trim().toLowerCase(),
   };
@@ -458,7 +458,8 @@ function filterItems(items) {
   return items.filter(item => {
     if (f.platform !== 'all' && item.platform !== f.platform) return false;
     if (f.sector !== 'all' && item.sector !== f.sector) return false;
-    if (f.level !== 'all' && item.level !== f.level) return false;
+    const contentType = item.content_type || (item.level === '资讯帖' ? 'news' : item.level === '垃圾帖' ? 'spam' : 'opinion');
+    if (f.contentType !== 'all' && contentType !== f.contentType) return false;
     if (f.intent !== 'all' && item.intent !== f.intent) return false;
     if (f.q) {
       const hay = [
@@ -486,15 +487,15 @@ function renderPosts(items) {
           <div class="badges">
             <span class="badge platform">${escapeHtml(PLATFORM_NAMES[item.platform] || item.platform)}</span>
             <span class="badge sector">${escapeHtml(SECTOR_NAMES[item.sector] || item.sector)}</span>
-            <span class="badge level">${escapeHtml(item.level || '未判定')}</span>
+            <span class="badge level">${item.content_type === 'news' || item.level === '资讯帖' ? '资讯' : item.content_type === 'spam' || item.level === '垃圾帖' ? '无效' : '个人观点'}</span>
             <span class="badge ${intentBadge(item.intent)}">${escapeHtml(INTENT_NAMES[item.intent] || '观望')}</span>
             ${item.keyword ? `<span class="badge sector">关键词: ${escapeHtml(item.keyword)}</span>` : ''}
             ${item.is_mock ? `<span class="badge intent-sell">模拟数据</span>` : ''}
           </div>
         </div>
         <div class="score-box">
-          <div class="score-main">${Number(item.newbie_score || 0).toFixed(1)}</div>
-          <div class="score-sub">小白分 · ${item.newbie_confidence || 'low'}</div>
+          <div class="score-main">${item.content_type === 'news' || item.level === '资讯帖' ? '资讯' : escapeHtml(fmtSentiment(item.sentiment_score))}</div>
+          <div class="score-sub">${item.content_type === 'news' || item.level === '资讯帖' ? '仅计数' : '个人观点'}</div>
         </div>
       </div>
 
@@ -553,7 +554,7 @@ fetch('data/platform_posts.json')
       key => key
     ).sort((a, b) => (data.platform_counts[b] || 0) - (data.platform_counts[a] || 0)), '全部平台');
     buildSelectOptions(el('sector-filter'), Object.keys(SECTOR_NAMES), '全部板块');
-    buildSelectOptions(el('level-filter'), LEVEL_NAMES, '全部等级');
+    el('level-filter').innerHTML = '<option value="all">全部类型</option><option value="opinion">个人观点</option><option value="news">资讯</option><option value="spam">无效</option>';
     el('intent-filter').innerHTML = Object.entries(INTENT_NAMES).map(
       ([value, label]) => `<option value="${value}">${label}</option>`
     ).join('');

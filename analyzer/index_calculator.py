@@ -1,7 +1,4 @@
-"""
-宝妈指数计算引擎
-各个板块独立计算，各自有完整的历史曲线
-"""
+"""Market sentiment aggregation by sector and platform."""
 from datetime import datetime, date
 from typing import Dict, List
 import json
@@ -19,7 +16,12 @@ SECTOR_NAMES = {
 
 
 def _compute_llm_profile(posts: List) -> Dict:
-    llm_posts = [r for r in posts if getattr(r, "sentiment_source", "rules") == "llm"]
+    llm_posts = [
+        r for r in posts
+        if getattr(r, "sentiment_source", "rules") == "llm"
+        and getattr(r, "content_type", "opinion") == "opinion"
+        and getattr(r, "level", "") not in {"垃圾帖", "资讯帖"}
+    ]
     sentiment = {name: sum(getattr(r, "sentiment_label", "neutral") == name for r in llm_posts)
                  for name in ("fear", "greed", "neutral", "mixed")}
     position = {name: sum(getattr(r, "position_status", "unknown") == name for r in llm_posts)
@@ -30,7 +32,7 @@ def _compute_llm_profile(posts: List) -> Dict:
     sentiment_index = round(sum(
         float(getattr(r, "sentiment_score", 0) or 0) * max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1)
         for r in llm_posts
-    ) / max(weight, 1) * 100, 1)
+    ) / weight * 100, 1) if weight else 0.0
     known_positions = sum(position[name] for name in ("none", "holding", "trapped", "exited"))
     known_outlooks = sum(outlook[name] for name in ("bullish", "bearish", "sideways"))
     ratio = lambda count, total: round(count / max(total, 1) * 100, 1)
@@ -53,18 +55,7 @@ def _compute_llm_profile(posts: List) -> Dict:
 
 
 def compute_sector_index(analysis_results: List) -> Dict:
-    """
-    计算单个板块的宝妈指数 (0-100)
-    
-    兼容的旧宝妈指数维度:
-    1. 小白占比 (40%) — 该板块中小白帖的比例
-    2. 小白强度 (25%) — 小白帖的平均得分
-    3. 情绪极端度 (20%) — 贪婪/恐慌的情绪极端程度
-    4. 纯小白占比 (15%) — 小白样本中的高分占比
-
-    details.newbie_participation_index 是解耦后的新手参与热度，
-    不包含情绪方向；index 暂时保留旧公式以兼容历史曲线。
-    """
+    """Compute the directional market sentiment index (-100 to +100)."""
     if not analysis_results:
         return {
             "index": 0, 
@@ -74,10 +65,9 @@ def compute_sector_index(analysis_results: List) -> Dict:
     
     total = len(analysis_results)
 
-    # 过滤掉垃圾帖/纯资讯梳理帖
-    excluded_levels = {"垃圾帖", "资讯帖"}
-    valid_posts = [r for r in analysis_results if r.level not in excluded_levels]
-    spam_count = total - len(valid_posts)
+    spam_posts = [r for r in analysis_results if getattr(r, "content_type", "") == "spam" or r.level == "垃圾帖"]
+    news_posts = [r for r in analysis_results if getattr(r, "content_type", "") == "news" or r.level == "资讯帖"]
+    valid_posts = [r for r in analysis_results if r not in spam_posts and r not in news_posts]
     source_counts = {}
     by_platform = {}
     for item in valid_posts:
@@ -87,79 +77,49 @@ def compute_sector_index(analysis_results: List) -> Dict:
 
     llm_profile = _compute_llm_profile(valid_posts)
 
-    summary = _compute_summary_metrics(valid_posts)
-    index = summary["index"]
-    newbie_posts = summary["newbie_posts"]
-    avg_newbie_score = summary["avg_newbie_score"]
-    avg_sentiment = summary["avg_sentiment"]
-    purity_signal = summary["purity_signal"]
-    mom_buy_index = summary["mom_buy_index"]
-    mom_sell_index = summary["mom_sell_index"]
-    buy_sell_ratio = summary["buy_sell_ratio"]
+    index = llm_profile["market_sentiment_index"]
 
     platform_breakdown = {}
-    platform_indices = []
     for platform, items in sorted(by_platform.items()):
-        platform_summary = _compute_summary_metrics(items)
+        profile = _compute_llm_profile(items)
         platform_breakdown[platform] = {
-            "index": platform_summary["index"],
-            "valid_posts": platform_summary["valid_posts"],
-            "newbie_posts": platform_summary["newbie_count"],
-            "newbie_ratio": platform_summary["newbie_ratio"],
-            "newbie_participation_index": platform_summary["newbie_participation_index"],
-            "avg_newbie_score": platform_summary["avg_newbie_score"],
-            "avg_sentiment": platform_summary["avg_sentiment"],
-            "mom_buy_index": platform_summary["mom_buy_index"],
-            "mom_sell_index": platform_summary["mom_sell_index"],
-            "buy_sell_ratio": platform_summary["buy_sell_ratio"],
-            "llm_profile": _compute_llm_profile(items),
+            "index": profile["market_sentiment_index"],
+            "valid_posts": len(items),
+            "llm_profile": profile,
         }
-        platform_indices.append(platform_summary["newbie_participation_index"])
-
-    platform_divergence = round(max(platform_indices) - min(platform_indices), 1) if len(platform_indices) >= 2 else 0.0
+    platform_values = [v["index"] for v in platform_breakdown.values() if v["llm_profile"]["has_sentiment_data"]]
+    platform_divergence = round(max(platform_values) - min(platform_values), 1) if len(platform_values) >= 2 else 0.0
     
     return {
         "index": index,
-        "interpretation": interpret_index(index),
+        "interpretation": interpret_sentiment(index, llm_profile["has_sentiment_data"]),
         "details": {
             "total_posts": total,
             "valid_posts": len(valid_posts),
-            "spam_posts": spam_count,
-            "newbie_posts": summary["newbie_count"],
-            "pure_newbie": summary["pure_newbie_count"],
-            "newbie_ratio": summary["newbie_ratio"],
-            "newbie_participation_index": summary["newbie_participation_index"],
-            "index_method": "legacy-mom-index-v1",
-            "avg_newbie_score": round(avg_newbie_score, 1),
-            "avg_sentiment": round(avg_sentiment, 1),
-            "purity_signal": round(purity_signal, 1),
-            "activity": round(summary["activity_signal"], 1),
-            # 买入/卖出子指数
-            "mom_buy_index": mom_buy_index,
-            "mom_sell_index": mom_sell_index,
-            "buy_sell_ratio": buy_sell_ratio,
-            "buy_count": summary["buy_count"],
-            "sell_count": summary["sell_count"],
+            "opinion_posts": len(valid_posts),
+            "news_posts": len(news_posts),
+            "spam_posts": len(spam_posts),
+            "index_method": "llm-market-sentiment-v1",
             "source_counts": source_counts,
             "platform_breakdown": platform_breakdown,
             "platform_divergence": platform_divergence,
             "llm_profile": llm_profile,
         },
-        "top_newbie_posts": [
-            {
-                "title": r.title[:60],
-                "score": r.newbie_score,
-                "level": r.level,
-                "reasoning": r.reasoning[:150],
-                "sentiment": r.sentiment_score,
-                "intent": r.intent,
-                "platform": getattr(r, "platform", ""),
-                "intent_label": {"buy": "🟢 买入", "sell": "🔴 卖出", "neutral": "⚪ 观望"}.get(r.intent, ""),
-                "key_signals": r.key_signals[:2],
-            }
-            for r in sorted(newbie_posts, key=lambda x: x.newbie_score, reverse=True)[:5]
-        ],
     }
+
+
+def interpret_sentiment(index: float, has_data: bool = True) -> str:
+    if not has_data:
+        return "观点样本不足"
+    if index >= 50:
+        return "明显贪婪"
+    if index >= 15:
+        return "偏贪婪"
+    if index <= -50:
+        return "明显恐慌"
+    if index <= -15:
+        return "偏恐慌"
+    return "情绪中性"
 
 
 def _compute_summary_metrics(valid_posts: List) -> Dict:
@@ -370,7 +330,10 @@ def get_dashboard_data() -> Dict:
     
     for r in records:
         for sector, data in r.get("sectors", {}).items():
-            if sector in sector_history:
+            if (
+                sector in sector_history
+                and data.get("details", {}).get("index_method") == "llm-market-sentiment-v1"
+            ):
                 sector_history[sector].append({
                     "date": r["date"],
                     "index": data["index"],

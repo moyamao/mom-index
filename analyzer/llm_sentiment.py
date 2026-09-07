@@ -17,6 +17,7 @@ DEFAULT_MODEL = "gpt-4.1-mini"
 
 @dataclass
 class LlmSentimentDecision:
+    content_type: str
     sentiment_score: float
     sentiment_label: str
     emotion_intensity: float
@@ -85,8 +86,8 @@ def llm_profile() -> str:
 def llm_prompt_version() -> str:
     return (
         os.environ.get("MOM_INDEX_LLM_PROMPT_VERSION", "").strip()
-        or ini_get("llm", "prompt_version", "sentiment-v3").strip()
-        or "sentiment-v3"
+        or ini_get("llm", "prompt_version", "sentiment-v4").strip()
+        or "sentiment-v4"
     )
 
 
@@ -231,6 +232,7 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         return None
 
     return LlmSentimentDecision(
+        content_type=_normalize_content_type(parsed.get("content_type", "opinion")),
         sentiment_score=_clamp(float(parsed.get("sentiment_score", 0.0)), -1.0, 1.0),
         sentiment_label=_normalize_sentiment_label(parsed.get("sentiment_label", "neutral")),
         emotion_intensity=_clamp(float(parsed.get("emotion_intensity", 0.0)), 0.0, 1.0),
@@ -261,15 +263,17 @@ def _system_prompt(*, include_reasoning: bool) -> str:
     )
     return (
         "你是中文投资社媒情绪分析助手。"
-        "你的任务是提取发帖人的情绪、交易意图、当前持仓状态、本人对未来走势的观点和投资者成熟度，不是替用户预测股票涨跌。"
+        "先判断帖子是个人投资观点 opinion，还是新闻、公告、研报、产业资料等资讯 news。"
+        "只有 opinion 才提取发帖人的情绪、交易意图、当前持仓状态和本人对未来走势的观点，不是替用户预测股票涨跌。"
         "重点区分：恐慌、贪婪、中性、混合；以及买入、卖出、观望。"
         "要识别反讽、口嗨、转述新闻、纯资讯、情绪宣泄。"
-        "如果帖子主要是在转发资讯或产业事实，而不是表达本人情绪，sentiment_label 应偏 neutral，intent 应为 neutral。"
+        "如果 content_type=news，情绪必须 neutral、分数和强度必须为0、意图必须neutral、仓位和未来观点必须unknown。"
         "investor_maturity 只判断作者本人：明确自称投资新手或提出基础投资问题才是 novice；"
         "产品文案中的‘新手上手’、面向新手的教程标题、新闻公告、机构稿和引用他人说法都不是作者的新手证据，应为 not_applicable。"
         "请只输出 JSON，不要输出 markdown。"
         "字段必须包含："
-        '{"sentiment_label":"fear|greed|neutral|mixed",'
+        '{"content_type":"opinion|news",'
+        '"sentiment_label":"fear|greed|neutral|mixed",'
         '"sentiment_score":-1.0,'
         '"emotion_intensity":0.0,'
         '"intent":"buy|sell|neutral",'
@@ -305,6 +309,11 @@ def _normalize_sentiment_label(value: Any) -> str:
     if raw in {"fear", "greed", "neutral", "mixed"}:
         return raw
     return "neutral"
+
+
+def _normalize_content_type(value: Any) -> str:
+    raw = str(value or "opinion").strip().lower()
+    return raw if raw in {"opinion", "news"} else "opinion"
 
 
 def _normalize_intent(value: Any) -> str:
