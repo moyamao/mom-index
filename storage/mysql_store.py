@@ -411,9 +411,82 @@ def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List
         conn.close()
 
 
+def fetch_latest_collection_today() -> Optional[Dict]:
+    """Load the latest Beijing-time collection run from today, if one exists."""
+    if not mysql_enabled():
+        return None
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            cur.execute(
+                """
+                SELECT r.id, r.run_at
+                FROM mom_index_runs r
+                WHERE r.run_at >= CURDATE()
+                  AND r.run_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)
+                  AND EXISTS (
+                      SELECT 1 FROM mom_index_posts p WHERE p.run_id = r.id
+                  )
+                ORDER BY r.run_at DESC, r.id DESC
+                LIMIT 1
+                """
+            )
+            run = cur.fetchone()
+            if not run:
+                return None
+
+            cur.execute(
+                """
+                SELECT run_id, sector, platform, source_mode, post_id AS id,
+                       title, content, url, author, post_date AS date,
+                       post_datetime AS published_at, collected_at, raw_json
+                FROM mom_index_posts
+                WHERE run_id = %s
+                ORDER BY sector, post_datetime DESC, id DESC
+                """,
+                (run["id"],),
+            )
+            rows = cur.fetchall()
+
+        posts: Dict[str, List[Dict]] = defaultdict(list)
+        for row in rows:
+            try:
+                raw = json.loads(row.get("raw_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                raw = {}
+            post = dict(raw) if isinstance(raw, dict) else {}
+            post.update({
+                "run_id": int(row["run_id"]),
+                "id": row.get("id") or post.get("id", ""),
+                "platform": row.get("platform") or post.get("platform", ""),
+                "source_mode": row.get("source_mode") or post.get("source_mode", ""),
+                "title": row.get("title") or post.get("title", ""),
+                "content": row.get("content") or post.get("content", ""),
+                "url": row.get("url") or post.get("url", ""),
+                "author": row.get("author") or post.get("author", ""),
+                "date": row.get("date") or post.get("date", ""),
+                "collected_at": row.get("collected_at") or post.get("collected_at", ""),
+            })
+            published_at = row.get("published_at")
+            if isinstance(published_at, datetime):
+                published_at = published_at.strftime("%Y-%m-%d %H:%M:%S")
+            post["published_at"] = published_at or post.get("published_at", "")
+            posts[row["sector"]].append(post)
+
+        run_at = run.get("run_at")
+        if isinstance(run_at, datetime):
+            run_at = run_at.strftime("%Y-%m-%d %H:%M:%S")
+        return {"run_id": int(run["id"]), "run_at": run_at or "", "posts": dict(posts)}
+    finally:
+        conn.close()
+
+
 def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[str, List[Dict]], note: str = "on-demand analysis") -> int:
     """Persist an analysis-only batch while retaining each post's source run id."""
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
+    from runtime_config import ini_get
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -425,8 +498,10 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                 """INSERT INTO mom_index_analysis_batches
                    (profile, model_name, prompt_version, machine_role, started_at,
                     requested_posts, analyzed_posts, llm_posts, failed_posts, status, note)
-                   VALUES (%s,%s,%s,'analyst',%s,%s,0,%s,%s,'running',%s)""",
-                (llm_profile(), llm_model_name(), llm_prompt_version(), beijing_now(), requested,
+                   VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,'running',%s)""",
+                (llm_profile(), llm_model_name(), llm_prompt_version(),
+                 os.environ.get("MOM_INDEX_RUNTIME_ROLE", "").strip()
+                 or ini_get("runtime", "role", "analyst"), beijing_now(), requested,
                  llm_posts, failed_posts, note),
             )
             batch_id = int(cur.lastrowid)

@@ -21,6 +21,7 @@ from analyzer.index_calculator import (
 )
 from storage.mysql_store import (
     mysql_enabled, persist_pipeline_run, fetch_keyword_history, fetch_model_comparison,
+    fetch_latest_collection_today, persist_standalone_analysis,
 )
 from keyword_config import get_keywords
 from runtime_config import ini_get, ini_get_bool, ini_get_int
@@ -148,6 +149,66 @@ def _enabled(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_reuse_today_collection() -> bool:
+    if _enabled("MOM_INDEX_FORCE_COLLECTION", default=False):
+        return False
+    value = os.environ.get("MOM_INDEX_REUSE_TODAY_COLLECTION")
+    if value is not None:
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return ini_get_bool("runtime", "reuse_today_collection", True)
+
+
+def _collect_posts() -> dict:
+    all_posts = {}
+
+    print("  [小红书]")
+    try:
+        xhs_data = collect_xhs()
+        xhs_total = sum(len(posts) for posts in xhs_data.values())
+        xhs_mock_count = sum(
+            1 for posts in xhs_data.values() for post in posts
+            if post.get("platform") == "xiaohongshu" and post.get("is_mock")
+        )
+        if xhs_total > 0:
+            if xhs_mock_count == xhs_total:
+                print(f"  ⚠️ 小红书本轮为模拟数据，不写入 MySQL ({xhs_total} 条)")
+            elif xhs_mock_count > 0:
+                print(f"  ⚠️ 小红书含部分模拟数据，仅真实数据会写入 MySQL ({xhs_total - xhs_mock_count}/{xhs_total} 条真实)")
+        for sector, posts in xhs_data.items():
+            all_posts[sector] = all_posts.get(sector, []) + posts
+    except Exception as e:
+        print(f"  小红书采集跳过: {e}")
+
+    if _enabled("MOM_INDEX_ENABLE_WEIBO", default=False):
+        print("  [微博]")
+        try:
+            weibo_data = collect_weibo()
+            for sector, posts in weibo_data.items():
+                all_posts[sector] = all_posts.get(sector, []) + posts
+        except Exception as e:
+            print(f"  微博采集跳过: {e}")
+
+    if xueqiu_enabled():
+        print("  [雪球]")
+        try:
+            xueqiu_data = collect_xueqiu()
+            for sector, posts in xueqiu_data.items():
+                all_posts[sector] = all_posts.get(sector, []) + posts
+        except Exception as e:
+            print(f"  雪球采集跳过: {e}")
+
+    if wechat_enabled():
+        print("  [微信群聊 · 本地导出]")
+        try:
+            wechat_data = collect_wechat()
+            for sector, posts in wechat_data.items():
+                all_posts[sector] = all_posts.get(sector, []) + posts
+        except Exception as e:
+            print(f"  微信群聊导入跳过: {e}")
+
+    return all_posts
 
 
 def _normalize_post_title(title: str) -> str:
@@ -310,53 +371,22 @@ def run_pipeline():
     # ===== 第1步: 数据采集 =====
     print("\n📡 第1步: 数据采集")
     
-    all_posts = {}
-    
-    # 小红书 (如果有API Key)
-    print("  [小红书]")
-    try:
-        xhs_data = collect_xhs()
-        xhs_total = sum(len(posts) for posts in xhs_data.values())
-        xhs_mock_count = sum(
-            1 for posts in xhs_data.values() for post in posts
-            if post.get("platform") == "xiaohongshu" and post.get("is_mock")
+    reused_collection = None
+    if _should_reuse_today_collection() and mysql_enabled():
+        try:
+            reused_collection = fetch_latest_collection_today()
+        except Exception as e:
+            print(f"  ⚠️ 检查今日采集批次失败，将执行正常采集: {e}")
+
+    if reused_collection:
+        all_posts = reused_collection["posts"]
+        reused_total = sum(len(posts) for posts in all_posts.values())
+        print(
+            f"  ♻️ 今天已经采集过，复用 MySQL run_id={reused_collection['run_id']} "
+            f"({reused_collection['run_at']}, {reused_total} 条)，跳过所有平台抓取"
         )
-        if xhs_total > 0:
-            if xhs_mock_count == xhs_total:
-                print(f"  ⚠️ 小红书本轮为模拟数据，不写入 MySQL ({xhs_total} 条)")
-            elif xhs_mock_count > 0:
-                print(f"  ⚠️ 小红书含部分模拟数据，仅真实数据会写入 MySQL ({xhs_total - xhs_mock_count}/{xhs_total} 条真实)")
-        for sector, posts in xhs_data.items():
-            all_posts[sector] = all_posts.get(sector, []) + posts
-    except Exception as e:
-        print(f"  小红书采集跳过: {e}")
-
-    if _enabled("MOM_INDEX_ENABLE_WEIBO", default=False):
-        print("  [微博]")
-        try:
-            weibo_data = collect_weibo()
-            for sector, posts in weibo_data.items():
-                all_posts[sector] = all_posts.get(sector, []) + posts
-        except Exception as e:
-            print(f"  微博采集跳过: {e}")
-
-    if xueqiu_enabled():
-        print("  [雪球]")
-        try:
-            xueqiu_data = collect_xueqiu()
-            for sector, posts in xueqiu_data.items():
-                all_posts[sector] = all_posts.get(sector, []) + posts
-        except Exception as e:
-            print(f"  雪球采集跳过: {e}")
-
-    if wechat_enabled():
-        print("  [微信群聊 · 本地导出]")
-        try:
-            wechat_data = collect_wechat()
-            for sector, posts in wechat_data.items():
-                all_posts[sector] = all_posts.get(sector, []) + posts
-        except Exception as e:
-            print(f"  微信群聊导入跳过: {e}")
+    else:
+        all_posts = _collect_posts()
 
     all_posts = _deconflict_cross_sector_posts(all_posts)
     all_posts = _dedupe_posts_by_title(all_posts)
@@ -411,9 +441,18 @@ def run_pipeline():
     if mysql_enabled():
         print("\n🗄️ 第5.5步: 写入 MySQL")
         try:
-            run_id = persist_pipeline_run(all_posts, analysis_results, sector_indices, dashboard)
-            if run_id:
-                print(f"  MySQL 写入成功: run_id={run_id}")
+            if reused_collection:
+                run_id = reused_collection["run_id"]
+                batch_id = persist_standalone_analysis(
+                    analysis_results,
+                    all_posts,
+                    note=f"reuse collection run_id={run_id}",
+                )
+                print(f"  MySQL 分析写入成功: collection_run_id={run_id}, batch_id={batch_id}")
+            else:
+                run_id = persist_pipeline_run(all_posts, analysis_results, sector_indices, dashboard)
+                if run_id:
+                    print(f"  MySQL 采集与分析写入成功: run_id={run_id}")
         except Exception as e:
             print(f"  MySQL 写入跳过: {e}")
 
