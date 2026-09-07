@@ -20,11 +20,13 @@ import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 import hashlib
+import re
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pymysql
-from post_time import beijing_now
+from post_time import beijing_now, normalize_social_datetime
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -140,6 +142,45 @@ def _ensure_tables(cur) -> None:
             ADD COLUMN post_datetime DATETIME NULL AFTER post_date
             """
         )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mom_index_post_catalog (
+            content_key CHAR(64) NOT NULL PRIMARY KEY,
+            platform VARCHAR(32) NOT NULL,
+            post_id VARCHAR(128) DEFAULT '',
+            canonical_url TEXT,
+            author VARCHAR(255) DEFAULT '',
+            title TEXT,
+            content MEDIUMTEXT,
+            post_datetime DATETIME NULL,
+            first_seen_at DATETIME NOT NULL,
+            last_seen_at DATETIME NOT NULL,
+            first_run_id BIGINT UNSIGNED NOT NULL,
+            last_run_id BIGINT UNSIGNED NOT NULL,
+            raw_json LONGTEXT,
+            KEY idx_post_catalog_platform_id (platform, post_id),
+            KEY idx_post_catalog_datetime (post_datetime),
+            KEY idx_post_catalog_last_seen (last_seen_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mom_index_post_sightings (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            run_id BIGINT UNSIGNED NOT NULL,
+            content_key CHAR(64) NOT NULL,
+            sector VARCHAR(32) NOT NULL,
+            keyword VARCHAR(255) DEFAULT '',
+            collected_at DATETIME NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_post_sighting (run_id, content_key, sector, keyword),
+            KEY idx_post_sightings_run (run_id),
+            KEY idx_post_sightings_content (content_key),
+            KEY idx_post_sightings_sector_time (sector, collected_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS mom_index_analysis_batches (
@@ -261,6 +302,110 @@ def _content_hash(post: Dict) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _normalize_identity_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _canonical_url(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw
+    ignored = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "spm", "from"}
+    query = urlencode(
+        sorted((key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True) if key.lower() not in ignored)
+    )
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
+
+
+def post_content_key(post: Dict) -> str:
+    """Return a stable cross-run identity for one source post."""
+    platform = _normalize_identity_text(post.get("platform")) or "unknown"
+    post_id = _normalize_identity_text(post.get("id") or post.get("post_id"))
+    if post_id:
+        identity = f"id|{platform}|{post_id}"
+    else:
+        canonical_url = _canonical_url(post.get("url"))
+        if canonical_url:
+            identity = f"url|{platform}|{canonical_url}"
+        else:
+            published_at = normalize_social_datetime(post.get("published_at") or post.get("date"))
+            identity = "fallback|{}|{}|{}|{}|{}".format(
+                platform,
+                _normalize_identity_text(post.get("author")),
+                published_at,
+                _normalize_identity_text(post.get("title")),
+                _normalize_identity_text(post.get("content")),
+            )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _post_seen_at(post: Dict) -> datetime:
+    normalized = normalize_social_datetime(post.get("collected_at"))
+    if normalized:
+        return datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+    return beijing_now()
+
+
+def _post_datetime(post: Dict):
+    return normalize_social_datetime(post.get("published_at") or post.get("date")) or None
+
+
+def _upsert_post_catalog(cur, run_id: int, all_posts: Dict[str, List[Dict]]) -> tuple[int, int]:
+    catalog_rows = []
+    sighting_rows = []
+    for sector, posts in all_posts.items():
+        for post in posts:
+            if post.get("platform") == "xiaohongshu" and post.get("is_mock"):
+                continue
+            content_key = post_content_key(post)
+            seen_at = _post_seen_at(post)
+            catalog_rows.append((
+                content_key, post.get("platform", "") or "unknown",
+                str(post.get("id") or post.get("post_id") or ""), _canonical_url(post.get("url")),
+                post.get("author", ""), post.get("title", ""), post.get("content", ""),
+                _post_datetime(post), seen_at, seen_at, run_id, run_id,
+                json.dumps(post, ensure_ascii=False),
+            ))
+            sighting_rows.append((
+                run_id, content_key, sector, str(post.get("keyword", "") or "")[:255], seen_at,
+            ))
+
+    if catalog_rows:
+        cur.executemany(
+            """
+            INSERT INTO mom_index_post_catalog (
+                content_key, platform, post_id, canonical_url, author, title, content,
+                post_datetime, first_seen_at, last_seen_at, first_run_id, last_run_id, raw_json
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                last_seen_at=GREATEST(last_seen_at, VALUES(last_seen_at)),
+                last_run_id=VALUES(last_run_id),
+                canonical_url=IF(VALUES(canonical_url) <> '', VALUES(canonical_url), canonical_url),
+                author=IF(VALUES(author) <> '', VALUES(author), author),
+                title=IF(CHAR_LENGTH(VALUES(title)) > CHAR_LENGTH(COALESCE(title, '')), VALUES(title), title),
+                content=IF(CHAR_LENGTH(VALUES(content)) > CHAR_LENGTH(COALESCE(content, '')), VALUES(content), content),
+                post_datetime=COALESCE(post_datetime, VALUES(post_datetime)),
+                raw_json=IF(CHAR_LENGTH(VALUES(content)) >= CHAR_LENGTH(COALESCE(content, '')), VALUES(raw_json), raw_json)
+            """,
+            catalog_rows,
+        )
+    if sighting_rows:
+        cur.executemany(
+            """
+            INSERT INTO mom_index_post_sightings (run_id, content_key, sector, keyword, collected_at)
+            VALUES (%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE collected_at=VALUES(collected_at)
+            """,
+            sighting_rows,
+        )
+    return len(catalog_rows), len(sighting_rows)
+
+
 def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_posts: Dict[str, List[Dict]], batch_id: int) -> Iterable[tuple]:
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
     post_lookup = {
@@ -344,6 +489,7 @@ def persist_pipeline_run(
                     """,
                     post_rows,
                 )
+            _upsert_post_catalog(cur, run_id, all_posts)
 
             analysis_rows = list(_iter_analysis_rows(run_id, analysis_results, all_posts, batch_id))
             if analysis_rows:
@@ -374,6 +520,67 @@ def persist_pipeline_run(
         conn.close()
 
 
+def backfill_post_catalog(batch_size: int = 1000) -> Dict[str, int]:
+    """Populate canonical post identities and sightings from legacy snapshots."""
+    conn = _connect()
+    scanned = 0
+    last_id = 0
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            while True:
+                cur.execute(
+                    """
+                    SELECT id, run_id, sector, platform, source_mode, post_id, title, content,
+                           url, author, post_date, post_datetime, collected_at, raw_json
+                    FROM mom_index_posts
+                    WHERE id > %s
+                    ORDER BY id
+                    LIMIT %s
+                    """,
+                    (last_id, max(1, batch_size)),
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    break
+                grouped: Dict[int, Dict[str, List[Dict]]] = defaultdict(lambda: defaultdict(list))
+                for row in rows:
+                    try:
+                        raw = json.loads(row.get("raw_json") or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        raw = {}
+                    post = dict(raw) if isinstance(raw, dict) else {}
+                    post.update({
+                        "platform": row.get("platform") or post.get("platform", ""),
+                        "source_mode": row.get("source_mode") or post.get("source_mode", ""),
+                        "id": row.get("post_id") or post.get("id", ""),
+                        "title": row.get("title") or post.get("title", ""),
+                        "content": row.get("content") or post.get("content", ""),
+                        "url": row.get("url") or post.get("url", ""),
+                        "author": row.get("author") or post.get("author", ""),
+                        "date": row.get("post_date") or post.get("date", ""),
+                        "published_at": row.get("post_datetime") or post.get("published_at", ""),
+                        "collected_at": row.get("collected_at") or post.get("collected_at", ""),
+                    })
+                    grouped[int(row["run_id"])][row["sector"]].append(post)
+                    last_id = int(row["id"])
+                    scanned += 1
+                for run_id, posts in grouped.items():
+                    _upsert_post_catalog(cur, run_id, posts)
+                conn.commit()
+
+            cur.execute("SELECT COUNT(*) AS count FROM mom_index_post_catalog")
+            unique_posts = int(cur.fetchone()["count"])
+            cur.execute("SELECT COUNT(*) AS count FROM mom_index_post_sightings")
+            sightings = int(cur.fetchone()["count"])
+        return {"scanned": scanned, "unique_posts": unique_posts, "sightings": sightings}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List[Dict]]:
     """Load one newest copy of each source post; never starts a collector."""
     conn = _connect()
@@ -382,18 +589,18 @@ def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List
             _ensure_tables(cur)
             cur.execute(
                 """
-                SELECT p.run_id, p.sector, p.platform, p.source_mode, p.post_id AS id,
-                       p.title, p.content, p.url, p.author, p.post_date AS date,
-                       p.post_datetime AS published_at, p.collected_at, p.raw_json
-                FROM mom_index_posts p
+                SELECT s.run_id, s.sector, c.platform, c.post_id AS id,
+                       c.title, c.content, c.canonical_url AS url, c.author,
+                       c.post_datetime AS published_at, s.collected_at, c.raw_json
+                FROM mom_index_post_catalog c
                 INNER JOIN (
-                    SELECT platform, sector, post_id, MAX(id) AS newest_id
-                    FROM mom_index_posts
-                    WHERE post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)
-                      AND post_id <> ''
-                    GROUP BY platform, sector, post_id
-                ) latest ON latest.newest_id = p.id
-                ORDER BY p.post_datetime DESC
+                    SELECT content_key, sector, MAX(id) AS newest_id
+                    FROM mom_index_post_sightings
+                    GROUP BY content_key, sector
+                ) latest ON latest.content_key = c.content_key
+                INNER JOIN mom_index_post_sightings s ON s.id = latest.newest_id
+                WHERE c.post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                ORDER BY c.post_datetime DESC
                 LIMIT %s
                 """,
                 (max(1, days), max(1, limit)),
@@ -401,7 +608,12 @@ def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List
             rows = cur.fetchall()
         result: Dict[str, List[Dict]] = defaultdict(list)
         for row in rows:
-            post = dict(row)
+            try:
+                raw = json.loads(row.get("raw_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                raw = {}
+            post = dict(raw) if isinstance(raw, dict) else {}
+            post.update({key: value for key, value in row.items() if key != "raw_json"})
             if isinstance(post.get("published_at"), datetime):
                 post["published_at"] = post["published_at"].strftime("%Y-%m-%d %H:%M:%S")
             post.pop("raw_json", None)
