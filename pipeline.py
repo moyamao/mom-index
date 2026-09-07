@@ -158,6 +158,35 @@ def _should_reuse_today_collection() -> bool:
     return ini_get_bool("runtime", "reuse_today_collection", True)
 
 
+def _requested_platform_refreshes() -> set[str]:
+    raw = os.environ.get("MOM_INDEX_REFRESH_PLATFORMS", "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _refresh_platforms(all_posts: dict, platforms: set[str]) -> tuple[dict, set[str]]:
+    """Refresh selected sources while retaining the rest of today's collection."""
+    supported = {"weibo": collect_weibo}
+    unknown = platforms - supported.keys()
+    if unknown:
+        raise ValueError(f"不支持单独刷新的平台: {', '.join(sorted(unknown))}")
+
+    merged = {sector: list(posts) for sector, posts in all_posts.items()}
+    refreshed = set()
+    for platform in sorted(platforms):
+        print(f"  [增量刷新-{platform}] 开始补抓")
+        incoming = supported[platform]()
+        incoming_total = sum(len(posts) for posts in incoming.values())
+        if incoming_total <= 0:
+            print(f"  ⚠️ [增量刷新-{platform}] 返回 0 条，保留原有数据")
+            continue
+        for sector in set(merged) | set(incoming):
+            retained = [post for post in merged.get(sector, []) if post.get("platform") != platform]
+            merged[sector] = retained + list(incoming.get(sector, []))
+        refreshed.add(platform)
+        print(f"  [增量刷新-{platform}] 成功补抓 {incoming_total} 条并替换旧样本")
+    return merged, refreshed
+
+
 def _collect_posts() -> dict:
     all_posts = {}
 
@@ -373,6 +402,7 @@ def run_pipeline():
     print("\n📡 第1步: 数据采集")
     
     reused_collection = None
+    refreshed_platforms = set()
     if _should_reuse_today_collection() and mysql_enabled():
         try:
             reused_collection = fetch_latest_collection_today()
@@ -386,6 +416,12 @@ def run_pipeline():
             f"  ♻️ 今天已经采集过，复用 MySQL run_id={reused_collection['run_id']} "
             f"({reused_collection['run_at']}, {reused_total} 条)，跳过所有平台抓取"
         )
+        requested_refreshes = _requested_platform_refreshes()
+        if requested_refreshes:
+            try:
+                all_posts, refreshed_platforms = _refresh_platforms(all_posts, requested_refreshes)
+            except Exception as e:
+                print(f"  ⚠️ 单平台增量刷新失败，继续使用原批次: {e}")
     else:
         all_posts = _collect_posts()
 
@@ -439,7 +475,7 @@ def run_pipeline():
     if mysql_enabled():
         print("\n🗄️ 第5.5步: 写入 MySQL")
         try:
-            if reused_collection:
+            if reused_collection and not refreshed_platforms:
                 run_id = reused_collection["run_id"]
                 batch_id = persist_standalone_analysis(
                     analysis_results,
@@ -450,7 +486,8 @@ def run_pipeline():
             else:
                 run_id = persist_pipeline_run(all_posts, analysis_results, sector_indices, dashboard)
                 if run_id:
-                    print(f"  MySQL 采集与分析写入成功: run_id={run_id}")
+                    refresh_note = f"，增量刷新 {','.join(sorted(refreshed_platforms))}" if refreshed_platforms else ""
+                    print(f"  MySQL 采集与分析写入成功: run_id={run_id}{refresh_note}")
         except Exception as e:
             print(f"  MySQL 写入跳过: {e}")
 
