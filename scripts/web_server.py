@@ -4,12 +4,28 @@ import json
 import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
 from keyword_config import list_keyword_records, set_keyword
 from runtime_config import ini_get, ini_get_bool, ini_get_int
+
+
+def _parse_keyword_update(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("请求内容必须是 JSON 对象")
+    sector = str(payload.get("sector", "")).strip()
+    keyword = str(payload.get("keyword", "")).strip()
+    enabled = payload.get("enabled")
+    if not sector:
+        raise ValueError("板块不能为空")
+    if not keyword:
+        raise ValueError("关键词不能为空")
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled 必须是布尔值")
+    return sector, keyword, enabled
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -21,11 +37,19 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/api/keywords":
+        path = urlsplit(self.path).path
+        if path == "/api/keyword-admin/status":
+            self._json(200, {
+                "enabled": ini_get_bool("keyword_admin", "enabled", False),
+                "token_required": bool(ini_get("keyword_admin", "token", "").strip()),
+            })
+            return
+        if path == "/api/keywords":
             try:
                 self._json(200, {"items": list_keyword_records()})
             except Exception as exc:
@@ -34,22 +58,26 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
-        if self.path != "/api/keywords":
-            self._json(404, {"error": "not found"})
+        if urlsplit(self.path).path != "/api/keywords":
+            self._json(404, {"error": "接口不存在"})
             return
         if not ini_get_bool("keyword_admin", "enabled", False):
-            self._json(403, {"error": "keyword admin disabled"})
+            self._json(403, {"error": "关键词管理未启用，请在 config.ini 的 [keyword_admin] 中设置 enabled = true"})
             return
         expected = ini_get("keyword_admin", "token", "")
         supplied = self.headers.get("X-Admin-Token", "")
         if not expected or supplied != expected:
-            self._json(401, {"error": "invalid admin token"})
+            self._json(401, {"error": "管理 token 未填写或不正确"})
             return
         try:
             length = min(int(self.headers.get("Content-Length", "0")), 4096)
             payload = json.loads(self.rfile.read(length))
-            set_keyword(payload.get("sector", ""), payload.get("keyword", ""), bool(payload.get("enabled")), "web")
-            self._json(200, {"ok": True})
+            sector, keyword, enabled = _parse_keyword_update(payload)
+            set_keyword(sector, keyword, enabled, "web")
+            self._json(200, {
+                "ok": True,
+                "item": {"sector": sector, "keyword": keyword, "enabled": enabled},
+            })
         except (ValueError, json.JSONDecodeError) as exc:
             self._json(400, {"error": str(exc)})
         except Exception as exc:
