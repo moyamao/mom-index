@@ -46,6 +46,9 @@ def _compute_llm_profile(posts: List) -> Dict:
         "exited_ratio": ratio(position["exited"], known_positions),
         "bullish_ratio": ratio(outlook["bullish"], known_outlooks),
         "bearish_ratio": ratio(outlook["bearish"], known_outlooks),
+        "has_sentiment_data": bool(llm_posts),
+        "has_position_data": known_positions > 0,
+        "has_outlook_data": known_outlooks > 0,
     }
 
 
@@ -53,11 +56,14 @@ def compute_sector_index(analysis_results: List) -> Dict:
     """
     计算单个板块的宝妈指数 (0-100)
     
-    四个维度:
+    兼容的旧宝妈指数维度:
     1. 小白占比 (40%) — 该板块中小白帖的比例
     2. 小白强度 (25%) — 小白帖的平均得分
     3. 情绪极端度 (20%) — 贪婪/恐慌的情绪极端程度
-    4. 热度信号 (15%) — 该板块的讨论活跃度
+    4. 纯小白占比 (15%) — 小白样本中的高分占比
+
+    details.newbie_participation_index 是解耦后的新手参与热度，
+    不包含情绪方向；index 暂时保留旧公式以兼容历史曲线。
     """
     if not analysis_results:
         return {
@@ -100,6 +106,7 @@ def compute_sector_index(analysis_results: List) -> Dict:
             "valid_posts": platform_summary["valid_posts"],
             "newbie_posts": platform_summary["newbie_count"],
             "newbie_ratio": platform_summary["newbie_ratio"],
+            "newbie_participation_index": platform_summary["newbie_participation_index"],
             "avg_newbie_score": platform_summary["avg_newbie_score"],
             "avg_sentiment": platform_summary["avg_sentiment"],
             "mom_buy_index": platform_summary["mom_buy_index"],
@@ -107,7 +114,7 @@ def compute_sector_index(analysis_results: List) -> Dict:
             "buy_sell_ratio": platform_summary["buy_sell_ratio"],
             "llm_profile": _compute_llm_profile(items),
         }
-        platform_indices.append(platform_summary["index"])
+        platform_indices.append(platform_summary["newbie_participation_index"])
 
     platform_divergence = round(max(platform_indices) - min(platform_indices), 1) if len(platform_indices) >= 2 else 0.0
     
@@ -121,6 +128,8 @@ def compute_sector_index(analysis_results: List) -> Dict:
             "newbie_posts": summary["newbie_count"],
             "pure_newbie": summary["pure_newbie_count"],
             "newbie_ratio": summary["newbie_ratio"],
+            "newbie_participation_index": summary["newbie_participation_index"],
+            "index_method": "legacy-mom-index-v1",
             "avg_newbie_score": round(avg_newbie_score, 1),
             "avg_sentiment": round(avg_sentiment, 1),
             "purity_signal": round(purity_signal, 1),
@@ -166,6 +175,13 @@ def _compute_summary_metrics(valid_posts: List) -> Dict:
     purity_signal = (len(pure_newbie) / max(newbie_count, 1)) * 100 if newbie_count > 0 else 0
     activity_signal = min(100, valid_count / 80 * 100)
 
+    # 独立的新手参与热度，不混入市场情绪方向。
+    newbie_participation_index = round(min(100, (
+        newbie_ratio * 0.50 +
+        avg_newbie_score * 0.30 +
+        purity_signal * 0.20
+    )), 1)
+
     index = (
         newbie_ratio * 0.40 +
         avg_newbie_score * 0.25 +
@@ -200,6 +216,7 @@ def _compute_summary_metrics(valid_posts: List) -> Dict:
         "pure_newbie_count": len(pure_newbie),
         "newbie_ratio": round(newbie_ratio, 1),
         "avg_newbie_score": avg_newbie_score,
+        "newbie_participation_index": newbie_participation_index,
         "avg_sentiment": avg_sentiment,
         "purity_signal": purity_signal,
         "activity_signal": activity_signal,

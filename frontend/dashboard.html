@@ -142,6 +142,9 @@ body {
   margin-top: 10px;
 }
 .direction-index { font-size: 20px !important; letter-spacing: -0.5px; }
+.primary-direction { margin:10px 0 4px;display:flex;align-items:flex-end;justify-content:space-between;gap:8px; }
+.primary-direction .value { font-size:46px;font-weight:800;line-height:1;letter-spacing:-2px; }
+.primary-direction .caption { color:#94a3b8;font-size:11px;text-align:right;line-height:1.5; }
 .llm-metric {
   padding: 7px 8px;
   border: 1px solid #334155;
@@ -559,7 +562,6 @@ function renderCards(data) {
     `更新于 ${latest.date}`;
 
   container.innerHTML = Object.entries(latest.sectors).map(([key, sector]) => {
-    const cls = getSignalClass(sector.index);
     const d = sector.details || {};
     const change = latestChanges[key] || {};
     const delta = change.delta;
@@ -573,6 +575,11 @@ function renderCards(data) {
     const sentimentText = dominantMetric(llm.sentiment, {fear:'恐慌', greed:'贪婪', neutral:'中性', mixed:'混合'});
     const sentimentIndex = Number(llm.market_sentiment_index || 0);
     const outlookIndex = Number(llm.outlook_index || 0);
+    const hasSentiment = Boolean(llm.has_sentiment_data ?? (llm.analyzed_posts > 0));
+    const hasOutlook = Boolean(llm.has_outlook_data ?? (llm.known_outlook_posts > 0));
+    const hasPosition = Boolean(llm.has_position_data ?? (llm.known_position_posts > 0));
+    const newbieParticipation = Number(d.newbie_participation_index ?? sector.index ?? 0);
+    const cls = getSignalClass(newbieParticipation);
     const totalSources = Object.values(sourceCounts).reduce((sum, value) => sum + value, 0);
     const sourceChips = Object.entries(sourceCounts)
       .sort((a, b) => b[1] - a[1])
@@ -582,19 +589,26 @@ function renderCards(data) {
       })
       .join('');
     const platformChips = Object.entries(platformBreakdown)
-      .sort((a, b) => (b[1]?.index || 0) - (a[1]?.index || 0))
+      .sort((a, b) => {
+        const priority = {xiaohongshu: 0, xueqiu: 1};
+        return (priority[a[0]] ?? 9) - (priority[b[0]] ?? 9);
+      })
       .map(([platform, stats]) => {
         const profile = stats.llm_profile || {};
         const platformSentiment = Number(profile.market_sentiment_index || 0);
         const platformOutlook = Number(profile.outlook_index || 0);
+        const hasPlatformSentiment = Boolean(profile.has_sentiment_data ?? (profile.analyzed_posts > 0));
+        const hasPlatformOutlook = Boolean(profile.has_outlook_data ?? (profile.known_outlook_posts > 0));
+        const hasPlatformPosition = Boolean(profile.has_position_data ?? (profile.known_position_posts > 0));
         return `
         <div class="platform-chip">
-          <div class="platform-title"><strong>${PLATFORM_NAMES[platform] || platform}</strong><span>${profile.analyzed_posts || 0}帖</span></div>
+          <div class="platform-title"><strong>${PLATFORM_NAMES[platform] || platform}</strong><span>${stats.valid_posts || 0}帖 · LLM ${profile.coverage_ratio || 0}%</span></div>
           <div class="platform-metrics">
-            <span>情绪 <b style="color:${directionColor(platformSentiment)}">${platformSentiment > 0 ? '+' : ''}${platformSentiment}</b></span>
-            <span>预期 <b style="color:${directionColor(platformOutlook)}">${platformOutlook > 0 ? '+' : ''}${platformOutlook}</b></span>
-            <span>持有 ${profile.holding_ratio || 0}%</span>
-            <span>被套 ${profile.trapped_ratio || 0}%</span>
+            <span>情绪 <b style="color:${hasPlatformSentiment ? directionColor(platformSentiment) : '#64748b'}">${hasPlatformSentiment ? `${platformSentiment > 0 ? '+' : ''}${platformSentiment}` : '样本不足'}</b></span>
+            <span>预期 <b style="color:${hasPlatformOutlook ? directionColor(platformOutlook) : '#64748b'}">${hasPlatformOutlook ? `${platformOutlook > 0 ? '+' : ''}${platformOutlook}` : '样本不足'}</b></span>
+            <span>持有 ${hasPlatformPosition ? `${profile.holding_ratio || 0}%` : '暂无'}</span>
+            <span>被套 ${hasPlatformPosition ? `${profile.trapped_ratio || 0}%` : '暂无'}</span>
+            <span>新手热度 ${stats.newbie_participation_index ?? stats.index ?? 0}</span>
           </div>
         </div>
       `})
@@ -603,28 +617,31 @@ function renderCards(data) {
       <div class="card ${key}">
         <div class="sector-name">${getEmoji(sector.index)} ${SECTOR_NAMES[key]}</div>
         <div style="font-size:10px;color:#94a3b8;margin-top:4px;">${analysisWindow.label || '当前批次'} · ${analysisWindow.sample_count ?? d.valid_posts ?? 0}帖${analysisWindow.mode === 'week' ? `（今日${analysisWindow.daily_count || 0}帖不足${analysisWindow.daily_min_posts || 0}）` : ''}</div>
-        <div class="index-value">${sector.index}</div>
-        <div class="index-label">宝妈指数</div>
-        <div class="signal ${cls}">${sector.interpretation}</div>
+        <div class="primary-direction">
+          <div class="value" style="color:${hasSentiment ? directionColor(sentimentIndex) : '#64748b'}">${hasSentiment ? `${sentimentIndex > 0 ? '+' : ''}${sentimentIndex}` : '—'}</div>
+          <div class="caption">市场情绪指数<br>${hasSentiment ? directionLabel(sentimentIndex,'贪婪','恐慌') : 'LLM 样本不足'}</div>
+        </div>
+        <div class="index-label">-100 恐慌 · 0 中性 · +100 贪婪</div>
+        <div class="signal ${cls}">新手参与热度 ${newbieParticipation} · ${d.newbie_posts || 0}/${d.valid_posts || d.total_posts || 0}帖</div>
         <div class="delta-row">
-          <div class="delta-chip ${deltaClass}">较前一日 ${deltaLabel}</div>
-          <div style="color:#64748b;">${change.points || 0} 个日期点</div>
+          <div class="delta-chip ${deltaClass}">旧宝妈指数较前一日 ${deltaLabel}</div>
+          <div style="color:#64748b;">历史兼容 · ${change.points || 0}点</div>
         </div>
         <!-- LLM 方向性核心指标 -->
         <div style="margin-top:14px; display:flex; gap:8px;">
           <div style="flex:1; background:rgba(59,130,246,0.08); border-radius:8px; padding:8px; text-align:center;">
-            <div class="direction-index" style="font-weight:700;color:${directionColor(sentimentIndex)}">${sentimentIndex > 0 ? '+' : ''}${sentimentIndex}</div>
-            <div style="font-size:10px;color:#64748b;">市场情绪 · ${directionLabel(sentimentIndex,'贪婪','恐慌')}</div>
+            <div class="direction-index" style="font-weight:700;color:${hasOutlook ? directionColor(outlookIndex) : '#64748b'}">${hasOutlook ? `${outlookIndex > 0 ? '+' : ''}${outlookIndex}` : '—'}</div>
+            <div style="font-size:10px;color:#64748b;">未来预期 · ${hasOutlook ? directionLabel(outlookIndex,'看涨','看跌','震荡') : '样本不足'}</div>
           </div>
           <div style="flex:1; background:rgba(245,158,11,0.08); border-radius:8px; padding:8px; text-align:center;">
-            <div class="direction-index" style="font-weight:700;color:${directionColor(outlookIndex)}">${outlookIndex > 0 ? '+' : ''}${outlookIndex}</div>
-            <div style="font-size:10px;color:#64748b;">未来预期 · ${directionLabel(outlookIndex,'看涨','看跌','震荡')}</div>
+            <div class="direction-index" style="font-weight:700;color:#e2e8f0">${llm.known_position_posts || 0}</div>
+            <div style="font-size:10px;color:#64748b;">明确仓位样本 / ${llm.analyzed_posts || 0}帖</div>
           </div>
         </div>
         <div style="margin-top:8px;display:flex;gap:6px;font-size:10px;color:#94a3b8;">
-          <span class="source-chip">持有 ${llm.holding_ratio || 0}%</span>
-          <span class="source-chip">被套 ${llm.trapped_ratio || 0}%</span>
-          <span class="source-chip">空仓 ${llm.none_ratio || 0}%</span>
+          <span class="source-chip">持有 ${hasPosition ? `${llm.holding_ratio || 0}%` : '暂无'}</span>
+          <span class="source-chip">被套 ${hasPosition ? `${llm.trapped_ratio || 0}%` : '暂无'}</span>
+          <span class="source-chip">空仓 ${hasPosition ? `${llm.none_ratio || 0}%` : '暂无'}</span>
         </div>
         <div class="detail-row">
           <span>小白帖</span><span>${d.newbie_posts || 0}/${d.valid_posts || d.total_posts || 0} (${d.newbie_ratio || 0}%)</span>
@@ -633,7 +650,7 @@ function renderCards(data) {
           <span>买卖比</span><span style="color:${(d.buy_sell_ratio||0)>1.5?'#f87171':(d.buy_sell_ratio||0)>0.8?'#facc15':'#4ade80'}">${d.buy_sell_ratio||0}:1 ${(d.buy_sell_ratio||0)>1.5?'🔥追涨':(d.buy_sell_ratio||0)>0.8?'⚖️平衡':'🩸恐慌'}</span>
         </div>
         <div class="detail-row">
-          <span>平台分歧</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
+          <span>平台新手热度差</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
         </div>
         <div class="llm-profile">
           <div class="llm-metric"><span>情绪构成</span><strong>${sentimentText}</strong></div>
