@@ -181,7 +181,10 @@ def _collect_posts() -> dict:
     except Exception as e:
         print(f"  小红书采集跳过: {e}")
 
-    if _enabled("MOM_INDEX_ENABLE_WEIBO", default=False):
+    if _enabled(
+        "MOM_INDEX_ENABLE_WEIBO",
+        default=ini_get_bool("weibo", "enabled", False),
+    ):
         print("  [微博]")
         try:
             weibo_data = collect_weibo()
