@@ -58,7 +58,8 @@ PRO_SIGNALS = [
 
 # 关键词匹配规则
 NEWBIE_KEYWORDS = {
-    "身份自述": ["小白", "新手", "新人", "刚入", "第一次", "菜鸟", "萌新", "宝妈", "全职妈妈", "学生党"],
+    # 身份自述由上下文正则单独判断，不能把“产品新手上手”等文案当成投资新手。
+    "身份自述": [],
     "知识求助": ["不懂", "请教", "各位大哥", "大佬", "请问", "有没有人", "谁知道", "求助", "怎么买", "在哪看", "什么意思"],
     "决策依赖": ["该不该", "要不要", "能不能", "可以吗", "行不行", "靠谱吗", "还能上车吗", "现在入手", "还会涨吗", "还会跌吗"],
     "情绪恐慌": ["好慌", "救命", "完了", "哭了", "怕了", "吓死", "心态崩", "太惨", "亏死了", "割肉", "后悔", "早知道"],
@@ -66,6 +67,13 @@ NEWBIE_KEYWORDS = {
     "过度乐观": ["冲", "梭哈", "稳赚", "必涨", "躺赚", "满仓干", "起飞", "暴富"],
     "短期思维": ["明天涨", "今天跌", "后天走势", "今天买"],
 }
+
+SELF_IDENTIFICATION_PATTERNS = [
+    r"(?:我是|本人是|作为(?:一名)?|我这个)(?:投资|炒股|理财|基金)?(?:小白|新手|新人|菜鸟|萌新|宝妈)",
+    r"(?:投资|炒股|理财|基金|股市)(?:小白|新手|新人|菜鸟|萌新)",
+    r"(?:刚入市|刚开户|刚开始(?:投资|炒股|买基金)|第一次(?:买|投资|入场|开户|定投))",
+    r"^(?:小白|新手|新人|宝妈).{0,12}(?:请教|求助|想买|能买吗|怎么买|要不要|能不能)",
+]
 
 PRO_KEYWORDS = {
     "专业术语": ["PE", "PB", "ROE", "溢价率", "折价", "估值", "基本面", "技术面", "MACD", "KDJ", "ETF", "联接", "LOF"],
@@ -203,6 +211,18 @@ class AnalysisResult:
     prompt_version: str = "rules-v1"
 
 
+def _newbie_level(score: float) -> str:
+    if score >= 50:
+        return "纯小白"
+    if score >= 35:
+        return "偏小白"
+    if score >= 20:
+        return "中间派"
+    if score >= 10:
+        return "偏专业"
+    return "专业投资者"
+
+
 def _normalize_post_datetime(post: Dict) -> tuple[str, str]:
     """统一真实发布时间；采集时间不能冒充帖子发布时间。"""
     published_at = (post.get("published_at") or "").strip()
@@ -295,8 +315,15 @@ def analyze_post(post: Dict, sector: str, run_llm_second_pass: bool = True) -> A
     matched_pro = []
     
     for signal in NEWBIE_SIGNALS:
-        keywords = NEWBIE_KEYWORDS.get(signal.name, [])
-        matched_kws = [kw for kw in keywords if kw.lower() in full_text.lower()]
+        if signal.name == "身份自述":
+            matched_kws = [
+                match.group(0)
+                for pattern in SELF_IDENTIFICATION_PATTERNS
+                if (match := re.search(pattern, full_text, flags=re.I))
+            ]
+        else:
+            keywords = NEWBIE_KEYWORDS.get(signal.name, [])
+            matched_kws = [kw for kw in keywords if kw.lower() in full_text.lower()]
         if matched_kws:
             matched_newbie.append((signal.name, signal.description, signal.weight, matched_kws))
     
@@ -336,17 +363,7 @@ def analyze_post(post: Dict, sector: str, run_llm_second_pass: bool = True) -> A
         result.newbie_confidence = "low"
     
     # 5. 判定等级
-    s = result.newbie_score
-    if s >= 50:
-        result.level = "纯小白"
-    elif s >= 35:
-        result.level = "偏小白"
-    elif s >= 20:
-        result.level = "中间派"
-    elif s >= 10:
-        result.level = "偏专业"
-    else:
-        result.level = "专业投资者"
+    result.level = _newbie_level(result.newbie_score)
     
     # 6. 生成推理文本
     result.reasoning = _generate_reasoning(
@@ -422,7 +439,7 @@ def _generate_reasoning(
     
     if not matched_newbie and not matched_pro:
         parts.append("未命中明确的信号词，内容较短或信息不足。")
-        parts.append("根据有限信息判定为中间派。")
+        parts.append("不把信息不足作为小白证据，保留低置信度规则结果。")
         return " ".join(parts)
     
     # 小白信号
@@ -539,8 +556,26 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
     result.intent_strength = llm_decision.intent_strength
     result.position_status = llm_decision.position_status
     result.market_outlook = llm_decision.market_outlook
+    maturity = llm_decision.investor_maturity
+    maturity_confidence = llm_decision.maturity_confidence
+    if maturity == "not_applicable" and maturity_confidence >= 0.65:
+        result.newbie_score = 0
+        result.level = "资讯帖"
+        result.newbie_confidence = "high"
+    elif maturity in {"novice", "general", "professional"} and maturity_confidence >= 0.65:
+        target_score = {"novice": 65.0, "general": 25.0, "professional": 5.0}[maturity]
+        llm_weight = min(0.75, maturity_confidence * 0.75)
+        result.newbie_score = round(
+            result.newbie_score * (1 - llm_weight) + target_score * llm_weight,
+            1,
+        )
+        result.level = _newbie_level(result.newbie_score)
+        result.newbie_confidence = "high" if maturity_confidence >= 0.8 else "medium"
     if llm_decision.reasoning:
-        result.reasoning += f" 情绪二判: {llm_decision.reasoning}"
+        result.reasoning += (
+            f" LLM二判: {llm_decision.reasoning}"
+            f" 投资者成熟度={maturity}({maturity_confidence:.2f})。"
+        )
 
 
 def _refresh_key_signals(result: AnalysisResult) -> None:
@@ -581,7 +616,9 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
     for sector, posts in sector_data.items():
         for post, result in zip(posts, all_results[sector]):
             if should_run_llm_second_pass(result) and (
-                llm_mode() == "all" or _has_llm_review_cue(post)
+                llm_mode() == "all"
+                or result.newbie_confidence == "low"
+                or _has_llm_review_cue(post)
             ):
                 candidates.append((result.source_datetime or result.source_date or "", sector, post, result))
 

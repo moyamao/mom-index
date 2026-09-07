@@ -24,6 +24,8 @@ class LlmSentimentDecision:
     intent_strength: float
     position_status: str
     market_outlook: str
+    investor_maturity: str
+    maturity_confidence: float
     confidence: float
     reasoning: str
     source: str = "llm"
@@ -83,8 +85,8 @@ def llm_profile() -> str:
 def llm_prompt_version() -> str:
     return (
         os.environ.get("MOM_INDEX_LLM_PROMPT_VERSION", "").strip()
-        or ini_get("llm", "prompt_version", "sentiment-v2").strip()
-        or "sentiment-v2"
+        or ini_get("llm", "prompt_version", "sentiment-v3").strip()
+        or "sentiment-v3"
     )
 
 
@@ -236,6 +238,8 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         intent_strength=_clamp(float(parsed.get("intent_strength", 0.0)), 0.0, 1.0),
         position_status=_normalize_position(parsed.get("position_status", "unknown")),
         market_outlook=_normalize_outlook(parsed.get("market_outlook", "unknown")),
+        investor_maturity=_normalize_maturity(parsed.get("investor_maturity", "unknown")),
+        maturity_confidence=_clamp(float(parsed.get("maturity_confidence", 0.0)), 0.0, 1.0),
         confidence=_clamp(float(parsed.get("confidence", 0.5)), 0.0, 1.0),
         reasoning=str(parsed.get("reasoning", "") or "").strip(),
     )
@@ -257,10 +261,12 @@ def _system_prompt(*, include_reasoning: bool) -> str:
     )
     return (
         "你是中文投资社媒情绪分析助手。"
-        "你的任务是提取发帖人的情绪、交易意图、当前持仓状态和本人对未来走势的观点，不是替用户预测股票涨跌。"
+        "你的任务是提取发帖人的情绪、交易意图、当前持仓状态、本人对未来走势的观点和投资者成熟度，不是替用户预测股票涨跌。"
         "重点区分：恐慌、贪婪、中性、混合；以及买入、卖出、观望。"
         "要识别反讽、口嗨、转述新闻、纯资讯、情绪宣泄。"
         "如果帖子主要是在转发资讯或产业事实，而不是表达本人情绪，sentiment_label 应偏 neutral，intent 应为 neutral。"
+        "investor_maturity 只判断作者本人：明确自称投资新手或提出基础投资问题才是 novice；"
+        "产品文案中的‘新手上手’、面向新手的教程标题、新闻公告、机构稿和引用他人说法都不是作者的新手证据，应为 not_applicable。"
         "请只输出 JSON，不要输出 markdown。"
         "字段必须包含："
         '{"sentiment_label":"fear|greed|neutral|mixed",'
@@ -270,6 +276,8 @@ def _system_prompt(*, include_reasoning: bool) -> str:
         '"intent_strength":0.0,'
         '"position_status":"none|holding|trapped|exited|unknown",'
         '"market_outlook":"bullish|bearish|sideways|unknown",'
+        '"investor_maturity":"novice|general|professional|not_applicable|unknown",'
+        '"maturity_confidence":0.0,'
         '"confidence":0.0,'
         f"{reasoning_line}"
         "}"
@@ -316,6 +324,12 @@ def _normalize_position(value: Any) -> str:
 def _normalize_outlook(value: Any) -> str:
     raw = str(value or "unknown").strip().lower()
     return raw if raw in {"bullish", "bearish", "sideways", "unknown"} else "unknown"
+
+
+def _normalize_maturity(value: Any) -> str:
+    raw = str(value or "unknown").strip().lower()
+    allowed = {"novice", "general", "professional", "not_applicable", "unknown"}
+    return raw if raw in allowed else "unknown"
 
 
 def _clamp(value: float, low: float, high: float) -> float:
