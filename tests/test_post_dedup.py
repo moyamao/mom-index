@@ -1,6 +1,15 @@
 import unittest
+from datetime import datetime
 
-from storage.mysql_store import post_content_key
+from storage.mysql_store import _upsert_post_catalog, post_content_key
+
+
+class RecordingCursor:
+    def __init__(self):
+        self.calls = []
+
+    def executemany(self, sql, rows):
+        self.calls.append((sql, rows))
 
 
 class PostContentKeyTest(unittest.TestCase):
@@ -38,6 +47,20 @@ class PostContentKeyTest(unittest.TestCase):
             "content": "long mu",
         }
         self.assertEqual(post_content_key(first), post_content_key(second))
+
+    def test_catalog_serializes_database_datetime_values(self):
+        cursor = RecordingCursor()
+        post = {
+            "platform": "xueqiu",
+            "id": "123",
+            "published_at": datetime(2026, 9, 7, 10, 0),
+            "collected_at": datetime(2026, 9, 7, 10, 5),
+        }
+
+        _upsert_post_catalog(cursor, 1, {"storage": [post]})
+
+        raw_json = cursor.calls[0][1][0][-1]
+        self.assertIn('"published_at": "2026-09-07 10:00:00"', raw_json)
 
 
 if __name__ == "__main__":

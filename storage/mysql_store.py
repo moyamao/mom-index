@@ -293,7 +293,7 @@ def _iter_post_rows(run_id: int, all_posts: Dict[str, List[Dict]]) -> Iterable[t
                 post.get("date", ""),
                 post.get("published_at") or None,
                 post.get("collected_at", ""),
-                json.dumps(post, ensure_ascii=False),
+                json.dumps(post, ensure_ascii=False, default=str),
             )
 
 
@@ -369,7 +369,7 @@ def _upsert_post_catalog(cur, run_id: int, all_posts: Dict[str, List[Dict]]) -> 
                 str(post.get("id") or post.get("post_id") or ""), _canonical_url(post.get("url")),
                 post.get("author", ""), post.get("title", ""), post.get("content", ""),
                 _post_datetime(post), seen_at, seen_at, run_id, run_id,
-                json.dumps(post, ensure_ascii=False),
+                json.dumps(post, ensure_ascii=False, default=str),
             ))
             sighting_rows.append((
                 run_id, content_key, sector, str(post.get("keyword", "") or "")[:255], seen_at,
