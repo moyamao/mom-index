@@ -99,6 +99,13 @@ def _max_chars() -> int:
     return int(os.environ.get("MOM_INDEX_LLM_MAX_CHARS", "") or ini_get_int("llm", "max_chars", 1200))
 
 
+def _max_output_tokens() -> int:
+    return int(
+        os.environ.get("MOM_INDEX_LLM_MAX_OUTPUT_TOKENS", "")
+        or ini_get_int("llm", "max_output_tokens", 256)
+    )
+
+
 def llm_max_posts_per_run() -> int:
     raw = os.environ.get("MOM_INDEX_LLM_MAX_POSTS_PER_RUN", "")
     if raw:
@@ -176,49 +183,48 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
     if len(text.strip()) < 8:
         return None
 
-    payload = {
-        "model": _model(),
-        "temperature": 0.1,
-        "chat_template_kwargs": {"enable_thinking": False},
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {
-                "role": "system",
-                "content": _system_prompt(include_reasoning=_request_reasoning()),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "sector": sector,
-                        "platform": platform,
-                        "title": title,
-                        "content": content,
-                        "current_rule_result": {
-                            "level": getattr(current_result, "level", ""),
-                            "newbie_score": float(getattr(current_result, "newbie_score", 0) or 0),
-                            "sentiment_score": float(getattr(current_result, "sentiment_score", 0) or 0),
-                            "intent": getattr(current_result, "intent", "neutral") or "neutral",
-                            "intent_strength": float(getattr(current_result, "intent_strength", 0) or 0),
-                        },
-                        "analysis_text": text,
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-        ],
-    }
-
     headers = {"Content-Type": "application/json"}
     if _api_key():
         headers["Authorization"] = f"Bearer {_api_key()}"
 
-    resp = requests.post(
-        f"{_base_url()}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=_timeout_seconds(),
-    )
+    attempts = [text]
+    shorter = _truncate_text(title=title, content=content, max_chars=min(500, _max_chars()))
+    if shorter != text:
+        attempts.append(shorter)
+
+    resp = None
+    for attempt, analysis_text in enumerate(attempts, start=1):
+        payload = {
+            "model": _model(),
+            "temperature": 0.1,
+            "max_tokens": _max_output_tokens(),
+            "chat_template_kwargs": {"enable_thinking": False},
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": _system_prompt(include_reasoning=_request_reasoning())},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"sector": sector, "platform": platform, "analysis_text": analysis_text},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
+        try:
+            resp = requests.post(
+                f"{_base_url()}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=_timeout_seconds(),
+            )
+            break
+        except requests.exceptions.ReadTimeout:
+            if attempt >= len(attempts):
+                raise
+
+    if resp is None:
+        return None
     resp.raise_for_status()
 
     data = resp.json()
