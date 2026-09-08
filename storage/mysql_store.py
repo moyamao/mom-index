@@ -221,10 +221,13 @@ def _ensure_tables(cur) -> None:
             newbie_confidence VARCHAR(16) DEFAULT '',
             level VARCHAR(32) DEFAULT '',
             sentiment_score DECIMAL(6,2) NOT NULL DEFAULT 0,
+            sentiment_label VARCHAR(16) NOT NULL DEFAULT 'neutral',
+            sentiment_confidence DECIMAL(6,4) NOT NULL DEFAULT 0,
             intent VARCHAR(16) DEFAULT '',
             intent_strength DECIMAL(6,2) NOT NULL DEFAULT 0,
             position_status VARCHAR(16) NOT NULL DEFAULT 'unknown',
             market_outlook VARCHAR(16) NOT NULL DEFAULT 'unknown',
+            content_type VARCHAR(16) NOT NULL DEFAULT 'opinion',
             key_signals_json TEXT,
             reasoning TEXT,
             matched_newbie_json TEXT,
@@ -251,6 +254,9 @@ def _ensure_tables(cur) -> None:
         "content_hash": "CHAR(64) DEFAULT ''",
         "position_status": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
         "market_outlook": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
+        "sentiment_label": "VARCHAR(16) NOT NULL DEFAULT 'neutral'",
+        "sentiment_confidence": "DECIMAL(6,4) NOT NULL DEFAULT 0",
+        "content_type": "VARCHAR(16) NOT NULL DEFAULT 'opinion'",
     }
     for column, definition in analysis_columns.items():
         if not _column_exists(cur, "mom_index_analysis", column):
@@ -426,10 +432,13 @@ def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_post
                 item.newbie_confidence,
                 item.level,
                 float(item.sentiment_score),
+                getattr(item, "sentiment_label", "neutral") or "neutral",
+                float(getattr(item, "sentiment_confidence", 0) or 0),
                 item.intent,
                 float(item.intent_strength),
                 getattr(item, "position_status", "unknown") or "unknown",
                 getattr(item, "market_outlook", "unknown") or "unknown",
+                getattr(item, "content_type", "opinion") or "opinion",
                 json.dumps(item.key_signals, ensure_ascii=False),
                 item.reasoning,
                 json.dumps(item.matched_newbie, ensure_ascii=False),
@@ -497,11 +506,12 @@ def persist_pipeline_run(
                     """
                     INSERT INTO mom_index_analysis (
                         run_id, sector, post_id, title, platform, newbie_score, newbie_confidence,
-                        level, sentiment_score, intent, intent_strength, position_status, market_outlook, key_signals_json, reasoning,
+                        level, sentiment_score, sentiment_label, sentiment_confidence, intent, intent_strength,
+                        position_status, market_outlook, content_type, key_signals_json, reasoning,
                         matched_newbie_json, matched_pro_json, batch_id, analysis_profile,
                         model_name, prompt_version, analysis_engine, content_hash
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     analysis_rows,
                 )
@@ -728,9 +738,13 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                     rows.append((
                         int(post.get("run_id") or 0), sector, item.post_id, item.title, item.platform,
                         float(item.newbie_score), item.newbie_confidence, item.level,
-                        float(item.sentiment_score), item.intent, float(item.intent_strength),
+                        float(item.sentiment_score),
+                        getattr(item, "sentiment_label", "neutral") or "neutral",
+                        float(getattr(item, "sentiment_confidence", 0) or 0),
+                        item.intent, float(item.intent_strength),
                         getattr(item, "position_status", "unknown") or "unknown",
                         getattr(item, "market_outlook", "unknown") or "unknown",
+                        getattr(item, "content_type", "opinion") or "opinion",
                         json.dumps(item.key_signals, ensure_ascii=False), item.reasoning,
                         json.dumps(item.matched_newbie, ensure_ascii=False),
                         json.dumps(item.matched_pro, ensure_ascii=False), batch_id, llm_profile(),
@@ -741,10 +755,11 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                 cur.executemany(
                     """INSERT INTO mom_index_analysis
                        (run_id,sector,post_id,title,platform,newbie_score,newbie_confidence,
-                        level,sentiment_score,intent,intent_strength,position_status,market_outlook,key_signals_json,reasoning,
+                        level,sentiment_score,sentiment_label,sentiment_confidence,intent,intent_strength,
+                        position_status,market_outlook,content_type,key_signals_json,reasoning,
                         matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
                         prompt_version,analysis_engine,content_hash)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     rows,
                 )
             cur.execute(
@@ -796,14 +811,26 @@ def _parse_post_day(post_datetime, post_date: str) -> Optional[date]:
 
 
 def _to_analysis_like(row: Dict) -> SimpleNamespace:
+    score = float(row.get("sentiment_score") or 0)
+    label = row.get("sentiment_label") or "neutral"
+    if label == "neutral" and score:
+        label = "greed" if score > 0 else "fear"
+    engine = row.get("analysis_engine") or "rules"
+    content_type = "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion")
     return SimpleNamespace(
         title=row.get("title", "") or "",
         newbie_score=float(row.get("newbie_score") or 0),
         level=row.get("level", "") or "",
         reasoning="",
-        sentiment_score=float(row.get("sentiment_score") or 0),
+        sentiment_score=score,
+        sentiment_label=label,
+        sentiment_confidence=float(row.get("sentiment_confidence") or 1),
+        sentiment_source="llm" if engine == "llm" else engine,
         intent=row.get("intent", "") or "neutral",
         intent_strength=float(row.get("intent_strength") or 0),
+        position_status=row.get("position_status", "unknown") or "unknown",
+        market_outlook=row.get("market_outlook", "unknown") or "unknown",
+        content_type=content_type,
         key_signals=[],
     )
 
@@ -840,8 +867,14 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
                     a.level,
                     a.newbie_score,
                     a.sentiment_score,
+                    a.sentiment_label,
+                    a.sentiment_confidence,
                     a.intent,
-                    a.intent_strength
+                    a.intent_strength,
+                    a.position_status,
+                    a.market_outlook,
+                    a.content_type,
+                    a.analysis_engine
                 FROM mom_index_posts p
                 INNER JOIN mom_index_analysis a
                     ON a.run_id = p.run_id
@@ -972,8 +1005,9 @@ def fetch_model_comparison() -> Dict:
             for batch in batches:
                 cur.execute(
                     """SELECT sector, post_id, title, platform, newbie_score,
-                              newbie_confidence, level, sentiment_score, intent,
-                              intent_strength, reasoning
+                              newbie_confidence, level, sentiment_score, sentiment_label,
+                              sentiment_confidence, intent, intent_strength, position_status,
+                              market_outlook, content_type, analysis_engine, reasoning
                        FROM mom_index_analysis WHERE batch_id=%s""",
                     (batch["id"],),
                 )

@@ -1129,7 +1129,8 @@ function renderKeywordHistory(data) {
 }
 
 // 加载数据
-fetch('data/dashboard_data.json')
+fetch('/api/dashboard-data', {cache: 'no-store'})
+  .then(response => response.ok ? response : fetch('data/dashboard_data.json', {cache: 'no-store'}))
   .then(r => r.json())
   .then(data => {
     renderCards(data);

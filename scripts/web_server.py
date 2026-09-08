@@ -28,6 +28,17 @@ def _parse_keyword_update(payload):
     return sector, keyword, enabled
 
 
+def _dashboard_payload():
+    dashboard_path = os.path.join(ROOT, "data", "dashboard_data.json")
+    with open(dashboard_path, "r", encoding="utf-8") as handle:
+        dashboard = json.load(handle)
+    from analyzer.platform_trends import fetch_platform_trends
+    from storage.mysql_store import fetch_model_comparison
+    dashboard["model_comparison"] = fetch_model_comparison()
+    dashboard["platform_sentiment_trends"] = fetch_platform_trends()
+    return dashboard
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=os.path.join(ROOT, "frontend"), **kwargs)
@@ -48,6 +59,12 @@ class Handler(SimpleHTTPRequestHandler):
                 "enabled": ini_get_bool("keyword_admin", "enabled", False),
                 "token_required": bool(ini_get("keyword_admin", "token", "").strip()),
             })
+            return
+        if path == "/api/dashboard-data":
+            try:
+                self._json(200, _dashboard_payload())
+            except Exception as exc:
+                self._json(500, {"error": f"读取最新模型结果失败: {exc}"})
             return
         if path == "/api/keywords":
             try:

@@ -15,7 +15,9 @@ def build_platform_trends(rows):
             continue
         seen.add(key)
         stamp = normalize_social_datetime(row.get('post_datetime'))
-        if not stamp or row.get('level') in {'垃圾帖', '资讯帖'}:
+        if (not stamp or row.get('analysis_engine') != 'llm'
+                or row.get('content_type') != 'opinion'
+                or row.get('level') in {'垃圾帖', '资讯帖'}):
             continue
         dt = datetime.fromisoformat(stamp)
         buckets = {'hourly': dt.strftime('%Y-%m-%d %H:00:00'),
@@ -53,7 +55,8 @@ def fetch_platform_trends():
         with conn.cursor() as cur:
             cur.execute('''
                 SELECT p.sector, p.platform, p.post_id, p.post_datetime,
-                       a.level, a.sentiment_score, a.intent, a.analysis_profile
+                       a.level, a.sentiment_score, a.intent, a.analysis_profile,
+                       a.analysis_engine, a.content_type
                 FROM mom_index_posts p JOIN mom_index_analysis a
                   ON a.run_id=p.run_id AND a.sector=p.sector
                  AND a.platform=p.platform AND a.post_id=p.post_id

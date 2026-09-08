@@ -92,6 +92,7 @@ python3 scripts/web_server.py
 - MacBook 是按需分析节点：`[runtime] role=analyst`、`allow_collection=false`，只从同一个 MySQL 读取帖子；`scripts/analyze_mysql_posts.py` 不导入、也不会调用任何采集器。
 - 每条分析结果保存模型 profile、完整模型名、提示词版本、分析引擎、批次和正文哈希。14B 与 27B 不互相覆盖。
 - 指标按帖子北京时间发布时间归属；模型分析时间仅用于审计。模型对比只展示各自批次和覆盖率，不把未分析当成零。
+- `scripts/web_server.py` 会在页面请求时从共享 MySQL 合并最新模型批次；MacBook 完成 27B 分析后无需复制前端 JSON，刷新 Mac mini 页面即可看到模型对比和平台趋势。
 
 Mac mini 首次将配置关键词导入 MySQL：
 
