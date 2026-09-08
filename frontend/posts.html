@@ -262,27 +262,27 @@ body {
   font-size: 14px;
 }
 .model-results {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 14px;
 }
 .model-result {
   background: rgba(15,23,42,0.48);
   border: 1px solid #334155;
-  border-top: 3px solid #38bdf8;
-  border-radius: 12px;
-  padding: 14px;
+  border-left: 3px solid #38bdf8;
+  border-radius: 9px;
+  padding: 9px 11px;
 }
-.model-result.fallback { border-top-color: #f59e0b; }
-.model-result-head { display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px; }
-.model-result-name { font-size:15px;font-weight:750;color:#f8fafc; }
-.model-result-engine { font-size:11px;color:#94a3b8; }
-.model-metrics { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
-.model-metric { border:1px solid #27364c;border-radius:8px;padding:8px; }
-.model-metric span { display:block;color:#64748b;font-size:10px;margin-bottom:3px; }
-.model-metric strong { color:#e2e8f0;font-size:13px; }
-.model-reasoning { color:#94a3b8;font-size:12px;line-height:1.6;margin-top:10px; }
+.model-result.fallback { border-left-color: #f59e0b; }
+.model-result-line { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+.model-result-name { min-width:100px;font-size:13px;font-weight:750;color:#f8fafc; }
+.model-result-engine { color:#64748b;font-size:11px; }
+.model-value { color:#cbd5e1;font-size:12px;white-space:nowrap; }
+.model-value strong { color:#f8fafc; }
+.model-reasoning-fold { margin-top:5px;color:#64748b;font-size:11px; }
+.model-reasoning-fold summary { cursor:pointer;display:inline;color:#94a3b8; }
+.model-reasoning-fold div { padding-top:5px;line-height:1.55;color:#94a3b8; }
 .empty, .loading {
   text-align: center;
   color: #94a3b8;
@@ -515,22 +515,20 @@ const OUTLOOK_NAMES = {bullish:'看涨', bearish:'看跌', sideways:'震荡', un
 function renderAnalysis(analysis) {
   const isLlm = analysis.analysis_engine === 'llm';
   const isNews = analysis.content_type === 'news';
+  const score = Math.round(Number(analysis.sentiment_score || 0) * 100);
   return `
     <section class="model-result ${isLlm ? '' : 'fallback'}">
-      <div class="model-result-head">
-        <div>
-          <div class="model-result-name">${escapeHtml(analysis.profile)} · ${isNews ? '资讯' : `情绪评分 ${Number(analysis.sentiment_score || 0) >= 0 ? '+' : ''}${Math.round(Number(analysis.sentiment_score || 0) * 100)}`}</div>
-          <div class="model-result-engine">${escapeHtml(analysis.model_name || '未记录模型')} · 批次 ${analysis.batch_id || '-'} · ${escapeHtml(analysis.prompt_version || '-')}</div>
-        </div>
-        <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM 判定' : '规则回退'}</span>
+      <div class="model-result-line">
+        <span class="model-result-name">${escapeHtml(analysis.profile)}</span>
+        <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM' : '规则回退'}</span>
+        <span class="model-value">类别 <strong>${isNews ? '资讯' : analysis.content_type === 'spam' ? '无效' : '观点'}</strong></span>
+        <span class="model-value">情绪 <strong>${isNews ? '不参与' : `${score >= 0 ? '+' : ''}${score}`}</strong></span>
+        <span class="model-value">意图 <strong>${escapeHtml(INTENT_NAMES[analysis.intent] || '观望')}</strong></span>
+        <span class="model-value">仓位 <strong>${escapeHtml(POSITION_NAMES[analysis.position_status] || '未知')}</strong></span>
+        <span class="model-value">预期 <strong>${escapeHtml(OUTLOOK_NAMES[analysis.market_outlook] || '未知')}</strong></span>
+        <span class="model-result-engine">置信度 ${Number(analysis.sentiment_confidence || 0).toFixed(2)}</span>
       </div>
-      <div class="model-metrics">
-        <div class="model-metric"><span>内容类型</span><strong>${isNews ? '资讯 · 仅计数' : '个人观点'}</strong></div>
-        <div class="model-metric"><span>情绪</span><strong>${isNews ? '不参与' : escapeHtml(fmtSentiment(analysis.sentiment_score))}</strong></div>
-        <div class="model-metric"><span>交易意图</span><strong>${escapeHtml(INTENT_NAMES[analysis.intent] || '观望')} · ${Number(analysis.intent_strength || 0).toFixed(2)}</strong></div>
-        <div class="model-metric"><span>仓位 / 预期</span><strong>${escapeHtml(POSITION_NAMES[analysis.position_status] || '未知')} / ${escapeHtml(OUTLOOK_NAMES[analysis.market_outlook] || '未知')}</strong></div>
-      </div>
-      <div class="model-reasoning">置信度 ${Number(analysis.sentiment_confidence || 0).toFixed(2)}${analysis.reasoning ? ` · ${escapeHtml(analysis.reasoning)}` : ''}</div>
+      ${analysis.reasoning ? `<details class="model-reasoning-fold"><summary>查看判定理由</summary><div>${escapeHtml(analysis.reasoning)}</div></details>` : ''}
     </section>`;
 }
 
@@ -541,7 +539,11 @@ function renderPosts(items) {
     return;
   }
 
-  container.innerHTML = items.map(item => `
+  container.innerHTML = items.map(item => {
+    const analyses = item.analyses || [];
+    const typeLabels = [...new Set(analyses.map(a => a.content_type === 'news' ? '资讯' : a.content_type === 'spam' ? '无效' : '个人观点'))];
+    const intentLabels = [...new Set(analyses.filter(a => a.content_type !== 'news').map(a => INTENT_NAMES[a.intent] || '观望'))];
+    return `
     <article class="post-card">
       <div class="post-head">
         <div style="min-width:0;">
@@ -549,6 +551,8 @@ function renderPosts(items) {
           <div class="badges">
             <span class="badge platform">${escapeHtml(PLATFORM_NAMES[item.platform] || item.platform)}</span>
             <span class="badge sector">${escapeHtml(SECTOR_NAMES[item.sector] || item.sector)}</span>
+            <span class="badge level">${escapeHtml(typeLabels.join(' / ') || '未分类')}</span>
+            ${intentLabels.length ? `<span class="badge intent-neutral">${escapeHtml(intentLabels.join(' / '))}</span>` : ''}
             ${item.keyword ? `<span class="badge sector">关键词: ${escapeHtml(item.keyword)}</span>` : ''}
           </div>
         </div>
@@ -573,10 +577,10 @@ function renderPosts(items) {
 
       ${renderContent(item)}
 
-      <div class="section-title">模型判定对照</div>
+      <div class="section-title">模型判定对照 · 情绪范围 -100 至 +100</div>
       <div class="model-results">${(item.analyses || []).map(renderAnalysis).join('')}</div>
     </article>
-  `).join('');
+  `}).join('');
 }
 
 function rerender() {
