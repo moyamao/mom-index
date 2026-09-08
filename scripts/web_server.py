@@ -4,7 +4,8 @@ import json
 import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from datetime import date
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
@@ -52,6 +53,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def end_headers(self):
+        if urlsplit(self.path).path.endswith(".html"):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        super().end_headers()
+
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == "/api/keyword-admin/status":
@@ -69,7 +75,10 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/post-model-comparison":
             try:
                 from storage.mysql_store import fetch_post_model_comparison
-                self._json(200, fetch_post_model_comparison())
+                query = parse_qs(urlsplit(self.path).query)
+                requested_date = query.get("date", [""])[0]
+                target_date = date.fromisoformat(requested_date) if requested_date else None
+                self._json(200, fetch_post_model_comparison(target_date))
             except Exception as exc:
                 self._json(500, {"error": f"读取帖子模型判定失败: {exc}"})
             return

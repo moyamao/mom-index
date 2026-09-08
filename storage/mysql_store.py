@@ -1017,20 +1017,41 @@ def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
                   newbie_confidence, level, sentiment_score, sentiment_label,
                   sentiment_confidence, intent, intent_strength, position_status,
                   market_outlook, content_type, analysis_engine, reasoning,
-                  content_hash
+                  content_hash,
+                  (SELECT MAX(p.post_datetime)
+                     FROM mom_index_posts p
+                    WHERE p.run_id=mom_index_analysis.run_id
+                      AND p.sector=mom_index_analysis.sector
+                      AND p.platform=mom_index_analysis.platform
+                      AND mom_index_analysis.post_id <> ''
+                      AND p.post_id=mom_index_analysis.post_id) AS post_datetime
            FROM mom_index_analysis WHERE batch_id=%s""",
         (batch_id,),
     )
     return cur.fetchall()
 
 
-def _shared_llm_keys(rows_by_profile: Dict[str, List[Dict]]) -> set:
+def _row_day(row: Dict) -> Optional[date]:
+    value = row.get("post_datetime")
+    if isinstance(value, datetime):
+        return value.date()
+    if value:
+        try:
+            return datetime.fromisoformat(str(value)).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _shared_llm_keys(rows_by_profile: Dict[str, List[Dict]], target_day: Optional[date] = None) -> set:
     """Only rows successfully judged by every model are comparable."""
     key_sets = []
     for rows in rows_by_profile.values():
         keys = {
             key for row in rows
-            if row.get("analysis_engine") == "llm" and (key := _analysis_key(row))
+            if row.get("analysis_engine") == "llm"
+            and (target_day is None or _row_day(row) == target_day)
+            and (key := _analysis_key(row))
         }
         key_sets.append(keys)
     return set.intersection(*key_sets) if key_sets else set()
@@ -1049,14 +1070,18 @@ def fetch_model_comparison() -> Dict:
                 batch["profile"]: _batch_analysis_rows(cur, batch["id"])
                 for batch in batches
             }
-            shared_keys = _shared_llm_keys(rows_by_profile)
+            target_day = beijing_now().date() - timedelta(days=1)
+            shared_keys = _shared_llm_keys(rows_by_profile, target_day)
             profiles = []
             from analyzer.index_calculator import compute_sector_index
             for batch in batches:
+                unique_rows = {
+                    _analysis_key(row): row
+                    for row in rows_by_profile[batch["profile"]]
+                    if _analysis_key(row) in shared_keys and row.get("analysis_engine") == "llm"
+                }
                 by_sector = defaultdict(list)
-                for row in rows_by_profile[batch["profile"]]:
-                    if _analysis_key(row) not in shared_keys:
-                        continue
+                for row in unique_rows.values():
                     by_sector[row["sector"]].append(_to_analysis_like(row))
                 completed = batch.get("completed_at")
                 profiles.append({
@@ -1070,14 +1095,23 @@ def fetch_model_comparison() -> Dict:
                     "failed_posts": batch["failed_posts"],
                     "comparison_posts": len(shared_keys),
                     "comparison_scope": "shared-successful-llm-posts",
-                    "sectors": {
-                        sector: compute_sector_index(by_sector[sector])
-                        for sector in MODEL_SECTOR_ORDER if by_sector.get(sector)
-                    },
+                    "comparison_date": target_day.isoformat(),
+                    "sectors": {},
                 })
+                for sector in MODEL_SECTOR_ORDER:
+                    if not by_sector.get(sector):
+                        continue
+                    sector_result = compute_sector_index(by_sector[sector])
+                    sector_result.setdefault("details", {})["analysis_window"] = {
+                        "mode": "day",
+                        "label": f"北京时间 {target_day.isoformat()}",
+                        "sample_count": len(by_sector[sector]),
+                    }
+                    profiles[-1]["sectors"][sector] = sector_result
             return {
                 "timezone": "Asia/Shanghai",
-                "comparison_scope": "两个最新批次中，同平台、同板块、同帖子且均由 LLM 成功分析的交集",
+                "comparison_scope": "北京时间昨天发布、同平台、同板块、同帖子且两个模型均由 LLM 成功分析",
+                "comparison_date": target_day.isoformat(),
                 "comparison_posts": len(shared_keys),
                 "profiles": profiles,
             }
@@ -1085,7 +1119,7 @@ def fetch_model_comparison() -> Dict:
         conn.close()
 
 
-def fetch_post_model_comparison() -> Dict:
+def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
     """Return the union of posts in latest model batches, grouped by post identity."""
     if not mysql_enabled():
         return {"profiles": [], "items": []}
@@ -1118,9 +1152,12 @@ def fetch_post_model_comparison() -> Dict:
             )
             rows = cur.fetchall()
 
+        target_day = target_day or (beijing_now().date() - timedelta(days=1))
         batch_meta = {batch["id"]: batch for batch in batches}
         grouped = {}
         for row in rows:
+            if _row_day(row) != target_day:
+                continue
             key = _analysis_key(row)
             if not key:
                 continue
@@ -1175,6 +1212,7 @@ def fetch_post_model_comparison() -> Dict:
         items.sort(key=lambda item: item.get("source_datetime") or "", reverse=True)
         return {
             "timezone": "Asia/Shanghai",
+            "comparison_date": target_day.isoformat(),
             "profiles": [batch["profile"] for batch in reversed(batches)],
             "items": items,
         }

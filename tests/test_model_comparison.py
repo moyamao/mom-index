@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, date
 from types import SimpleNamespace
 
 from storage.mysql_store import (
@@ -81,6 +82,23 @@ class ModelComparisonRowTest(unittest.TestCase):
             "content_hash": "abc123",
         }
         self.assertEqual(_analysis_key(row), ("nasdaq", "xiaohongshu", "abc123"))
+
+    def test_shared_keys_are_restricted_to_beijing_source_day(self):
+        rows = {
+            "mini-14b": [
+                {"sector": "gold", "platform": "xueqiu", "post_id": "1", "analysis_engine": "llm", "post_datetime": datetime(2026, 9, 7, 9)},
+                {"sector": "gold", "platform": "xueqiu", "post_id": "2", "analysis_engine": "llm", "post_datetime": datetime(2026, 9, 6, 23)},
+            ],
+            "macbook-27b": [
+                {"sector": "gold", "platform": "xueqiu", "post_id": "1", "analysis_engine": "llm", "post_datetime": datetime(2026, 9, 7, 9)},
+                {"sector": "gold", "platform": "xueqiu", "post_id": "2", "analysis_engine": "llm", "post_datetime": datetime(2026, 9, 6, 23)},
+            ],
+        }
+
+        self.assertEqual(
+            _shared_llm_keys(rows, date(2026, 9, 7)),
+            {("gold", "xueqiu", "1")},
+        )
 
 
 if __name__ == "__main__":

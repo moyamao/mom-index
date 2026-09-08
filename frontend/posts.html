@@ -519,7 +519,7 @@ function renderAnalysis(analysis) {
     <section class="model-result ${isLlm ? '' : 'fallback'}">
       <div class="model-result-head">
         <div>
-          <div class="model-result-name">${escapeHtml(analysis.profile)}</div>
+          <div class="model-result-name">${escapeHtml(analysis.profile)} · ${isNews ? '资讯' : `情绪评分 ${Number(analysis.sentiment_score || 0) >= 0 ? '+' : ''}${Math.round(Number(analysis.sentiment_score || 0) * 100)}`}</div>
           <div class="model-result-engine">${escapeHtml(analysis.model_name || '未记录模型')} · 批次 ${analysis.batch_id || '-'} · ${escapeHtml(analysis.prompt_version || '-')}</div>
         </div>
         <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM 判定' : '规则回退'}</span>
@@ -590,6 +590,7 @@ fetch('/api/post-model-comparison', {cache: 'no-store'})
     allItems = data.items || [];
     modelProfiles = data.profiles || [];
     renderSummary(allItems);
+    el('summary').insertAdjacentHTML('afterbegin', `<div class="subtitle" style="margin-bottom:12px">当前对照日期：北京时间 ${escapeHtml(data.comparison_date || '未知')}。仅展示当天发布的帖子。</div>`);
 
     const platformCounts = allItems.reduce((acc, item) => {
       acc[item.platform] = (acc[item.platform] || 0) + 1;
