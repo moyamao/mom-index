@@ -672,7 +672,7 @@ function renderModelComparison(data) {
     title.textContent = `${item.profile} · ${item.model_name}`;
     const meta = document.createElement('div');
     meta.className = 'model-meta';
-    meta.textContent = `${item.completed_at || '-'} · 原批次 ${item.analyzed_posts}/${item.requested_posts} · LLM成功 ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 北京时间 ${comparisonDate} 共同样本 ${item.comparison_posts || 0}帖 · 提示词 ${item.prompt_version}`;
+    meta.textContent = `${item.completed_at || '-'} · 原批次 ${item.analyzed_posts}/${item.requested_posts} · LLM成功 ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 北京时间 ${comparisonDate} ${profiles.length > 1 ? '共同样本' : '最新样本'} ${item.comparison_posts || 0}帖 · 提示词 ${item.prompt_version}`;
     const sectors = document.createElement('div');
     sectors.className = 'model-sectors';
     sectors.textContent = SECTOR_ORDER.filter(key => item.sectors?.[key]).map(key => `${SECTOR_NAMES[key] || key} ${item.sectors[key].index}`).join('　');

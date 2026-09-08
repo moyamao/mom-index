@@ -1011,16 +1011,19 @@ def _latest_model_batches(cur) -> List[Dict]:
     return cur.fetchall()
 
 
-def _comparison_model_batches(cur, target_day: date):
-    """Pick recent model batches with the largest exact overlap on target_day."""
+def _comparison_model_batches(cur, target_day: Optional[date] = None):
+    """Use the newest result, adding a second model only when it covers the same posts."""
     latest_batches = _latest_model_batches(cur)
+    if not latest_batches:
+        return [], {}, target_day
+    anchor = latest_batches[0]
+    anchor_rows = _batch_analysis_rows(cur, anchor["id"])
+    if target_day is None:
+        source_days = [_row_day(row) for row in anchor_rows]
+        target_day = max((day for day in source_days if day), default=beijing_now().date())
     profiles = [batch["profile"] for batch in latest_batches[:2]]
     if len(profiles) < 2:
-        rows = {
-            batch["profile"]: _batch_analysis_rows(cur, batch["id"])
-            for batch in latest_batches
-        }
-        return latest_batches, rows
+        return [anchor], {anchor["profile"]: anchor_rows}, target_day
 
     placeholders = ",".join(["%s"] * len(profiles))
     cur.execute(
@@ -1061,22 +1064,19 @@ def _comparison_model_batches(cur, target_day: date):
             if key:
                 keys_by_batch[row["batch_id"]].add(key)
 
-    best_pair = None
-    best_rank = (-1, -1)
-    for left in candidates[profiles[0]]:
-        for right in candidates[profiles[1]]:
-            overlap = len(keys_by_batch[left["id"]] & keys_by_batch[right["id"]])
-            recency = int(left["id"]) + int(right["id"])
-            if (overlap, recency) > best_rank:
-                best_rank = (overlap, recency)
-                best_pair = [left, right]
-
-    selected = best_pair or latest_batches[:2]
+    anchor_keys = keys_by_batch.get(anchor["id"], set())
+    second = max(
+        candidates[profiles[1]],
+        key=lambda batch: (len(anchor_keys & keys_by_batch[batch["id"]]), int(batch["id"])),
+        default=None,
+    )
+    overlap = len(anchor_keys & keys_by_batch.get(second["id"], set())) if second else 0
+    selected = [anchor] + ([second] if second and overlap else [])
     selected.sort(key=lambda batch: batch.get("completed_at") or datetime.min, reverse=True)
     return selected, {
-        batch["profile"]: _batch_analysis_rows(cur, batch["id"])
+        batch["profile"]: anchor_rows if batch["id"] == anchor["id"] else _batch_analysis_rows(cur, batch["id"])
         for batch in selected
-    }
+    }, target_day
 
 
 def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
@@ -1133,8 +1133,7 @@ def fetch_model_comparison() -> Dict:
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            target_day = beijing_now().date() - timedelta(days=1)
-            batches, rows_by_profile = _comparison_model_batches(cur, target_day)
+            batches, rows_by_profile, target_day = _comparison_model_batches(cur)
             shared_keys = _shared_llm_keys(rows_by_profile, target_day)
             profiles = []
             from analyzer.index_calculator import compute_sector_index
@@ -1174,7 +1173,7 @@ def fetch_model_comparison() -> Dict:
                     profiles[-1]["sectors"][sector] = sector_result
             return {
                 "timezone": "Asia/Shanghai",
-                "comparison_scope": "北京时间昨天发布、同平台、同板块、同帖子且两个模型均由 LLM 成功分析",
+                "comparison_scope": "最新模型结果；其他模型仅在覆盖同一发布日期及同一帖子时加入对比",
                 "comparison_date": target_day.isoformat(),
                 "comparison_posts": len(shared_keys),
                 "profiles": profiles,
@@ -1191,8 +1190,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            target_day = target_day or (beijing_now().date() - timedelta(days=1))
-            batches, _ = _comparison_model_batches(cur, target_day)
+            batches, _, target_day = _comparison_model_batches(cur, target_day)
             if not batches:
                 return {"profiles": [], "items": []}
             placeholders = ",".join(["%s"] * len(batches))
