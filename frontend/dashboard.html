@@ -547,6 +547,10 @@ function renderCards(data) {
     container.innerHTML = '<div class="loading">暂无数据，请先运行 pipeline.py</div>';
     return;
   }
+  if (!Object.keys(latest.sectors || {}).length) {
+    container.innerHTML = `<div class="loading">北京时间 ${latest.comparison_date || latest.date || '-'} 没有两个模型均成功分析的共同帖子，暂不生成对比指数。</div>`;
+    return;
+  }
 
   document.getElementById('update-time').textContent = 
     `更新于 ${latest.date}`;
@@ -696,7 +700,11 @@ function renderModelSwitcher(data) {
     }));
     const selected = profiles.find(item => item.profile === active);
     renderCards({
-      latest: {date: selected.completed_at || '-', sectors: selected.sectors || {}},
+      latest: {
+        date: selected.completed_at || '-',
+        comparison_date: selected.comparison_date || data.model_comparison?.comparison_date || '',
+        sectors: selected.sectors || {},
+      },
       latest_changes: {},
     });
   };

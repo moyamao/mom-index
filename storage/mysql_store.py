@@ -1011,6 +1011,74 @@ def _latest_model_batches(cur) -> List[Dict]:
     return cur.fetchall()
 
 
+def _comparison_model_batches(cur, target_day: date):
+    """Pick recent model batches with the largest exact overlap on target_day."""
+    latest_batches = _latest_model_batches(cur)
+    profiles = [batch["profile"] for batch in latest_batches[:2]]
+    if len(profiles) < 2:
+        rows = {
+            batch["profile"]: _batch_analysis_rows(cur, batch["id"])
+            for batch in latest_batches
+        }
+        return latest_batches, rows
+
+    placeholders = ",".join(["%s"] * len(profiles))
+    cur.execute(
+        f"""
+        SELECT id, profile, model_name, prompt_version, completed_at,
+               requested_posts, analyzed_posts, llm_posts, failed_posts
+        FROM mom_index_analysis_batches
+        WHERE status='completed' AND profile IN ({placeholders})
+        ORDER BY completed_at DESC, id DESC
+        """,
+        tuple(profiles),
+    )
+    candidates = defaultdict(list)
+    for batch in cur.fetchall():
+        if len(candidates[batch["profile"]]) < 14:
+            candidates[batch["profile"]].append(batch)
+
+    candidate_ids = [batch["id"] for profile in profiles for batch in candidates[profile]]
+    keys_by_batch = {batch_id: set() for batch_id in candidate_ids}
+    if candidate_ids:
+        id_placeholders = ",".join(["%s"] * len(candidate_ids))
+        next_day = target_day + timedelta(days=1)
+        cur.execute(
+            f"""
+            SELECT DISTINCT a.batch_id, a.sector, a.platform, a.post_id, a.content_hash
+            FROM mom_index_analysis a
+            INNER JOIN mom_index_posts p
+              ON p.run_id=a.run_id AND p.sector=a.sector
+             AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+            WHERE a.batch_id IN ({id_placeholders})
+              AND a.analysis_engine='llm'
+              AND p.post_datetime >= %s AND p.post_datetime < %s
+            """,
+            tuple(candidate_ids) + (target_day, next_day),
+        )
+        for row in cur.fetchall():
+            key = _analysis_key(row)
+            if key:
+                keys_by_batch[row["batch_id"]].add(key)
+
+    best_pair = None
+    best_rank = (-1, -1)
+    for left in candidates[profiles[0]]:
+        for right in candidates[profiles[1]]:
+            overlap = len(keys_by_batch[left["id"]] & keys_by_batch[right["id"]])
+            recency = int(left["id"]) + int(right["id"])
+            if (overlap, recency) > best_rank:
+                best_rank = (overlap, recency)
+                best_pair = [left, right]
+
+    selected = best_pair or latest_batches[:2]
+    selected.sort(key=lambda batch: batch.get("completed_at") or datetime.min, reverse=True)
+    return selected, {
+        batch["profile"]: _batch_analysis_rows(cur, batch["id"])
+        for batch in selected
+    }
+
+
 def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
     cur.execute(
         """SELECT run_id, sector, post_id, title, platform, newbie_score,
@@ -1065,12 +1133,8 @@ def fetch_model_comparison() -> Dict:
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            batches = _latest_model_batches(cur)
-            rows_by_profile = {
-                batch["profile"]: _batch_analysis_rows(cur, batch["id"])
-                for batch in batches
-            }
             target_day = beijing_now().date() - timedelta(days=1)
+            batches, rows_by_profile = _comparison_model_batches(cur, target_day)
             shared_keys = _shared_llm_keys(rows_by_profile, target_day)
             profiles = []
             from analyzer.index_calculator import compute_sector_index
@@ -1127,7 +1191,8 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            batches = _latest_model_batches(cur)
+            target_day = target_day or (beijing_now().date() - timedelta(days=1))
+            batches, _ = _comparison_model_batches(cur, target_day)
             if not batches:
                 return {"profiles": [], "items": []}
             placeholders = ",".join(["%s"] * len(batches))
@@ -1152,7 +1217,6 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
             )
             rows = cur.fetchall()
 
-        target_day = target_day or (beijing_now().date() - timedelta(days=1))
         batch_meta = {batch["id"]: batch for batch in batches}
         grouped = {}
         for row in rows:
