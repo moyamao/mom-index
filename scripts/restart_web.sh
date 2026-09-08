@@ -63,13 +63,16 @@ nohup "$PYTHON_BIN" -u scripts/web_server.py >> "$LOG_FILE" 2>&1 &
 pid=$!
 echo "$pid" > "$PID_FILE"
 
-for _ in {1..20}; do
+# Python 启动和首次 MySQL 查询需要一点时间，先等待监听就绪再做健康检查。
+sleep 1
+echo "等待 Web 服务健康检查..."
+for _ in {1..30}; do
   if ! kill -0 "$pid" 2>/dev/null; then
     echo "错误: Web 服务启动后立即退出。最近日志:" >&2
     tail -n 30 "$LOG_FILE" >&2
     exit 1
   fi
-  if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/api/dashboard-data" >/dev/null; then
+  if curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/dashboard-data" >/dev/null 2>&1; then
     echo "Web 服务已启动: http://0.0.0.0:$PORT/dashboard.html"
     echo "PID: $pid"
     echo "日志: $LOG_FILE"
