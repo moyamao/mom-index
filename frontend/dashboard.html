@@ -57,6 +57,9 @@ body {
 .model-name { font-weight:700;color:#f8fafc; }
 .model-meta { color:#94a3b8;font-size:12px;margin-top:5px;line-height:1.5; }
 .model-sectors { color:#cbd5e1;font-size:12px;margin-top:8px;line-height:1.7; }
+.model-switcher { display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px; }
+.model-switcher button { background:#1e293b;color:#cbd5e1;border:1px solid #475569;border-radius:999px;padding:9px 14px;cursor:pointer; }
+.model-switcher button.active { background:#1d4ed8;border-color:#60a5fa;color:#fff; }
 
 /* 指数卡片网格 */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 32px; }
@@ -438,6 +441,7 @@ body {
 </div>
 
 <div class="container">
+  <div class="model-switcher" id="model-switcher"></div>
   <!-- 各板块指数卡片 -->
   <div class="cards" id="cards"></div>
 
@@ -668,6 +672,32 @@ function renderModelComparison(data) {
     card.append(title, meta, sectors);
     grid.append(card);
   });
+}
+
+function renderModelSwitcher(data) {
+  const switcher = document.getElementById('model-switcher');
+  const profiles = data.model_comparison?.profiles || [];
+  if (!profiles.length) {
+    switcher.innerHTML = '<span class="source-chip">当前日常批次</span>';
+    renderCards(data);
+    return;
+  }
+  let active = profiles[0].profile;
+  const render = () => {
+    switcher.replaceChildren(...profiles.map(item => {
+      const button = document.createElement('button');
+      button.className = item.profile === active ? 'active' : '';
+      button.textContent = `${item.profile} · ${item.completed_at || '-'}`;
+      button.onclick = () => { active = item.profile; render(); };
+      return button;
+    }));
+    const selected = profiles.find(item => item.profile === active);
+    renderCards({
+      latest: {date: selected.completed_at || '-', sectors: selected.sectors || {}},
+      latest_changes: {},
+    });
+  };
+  render();
 }
 
 function renderCharts(data) {
@@ -1130,10 +1160,13 @@ function renderKeywordHistory(data) {
 
 // 加载数据
 fetch('/api/dashboard-data', {cache: 'no-store'})
-  .then(response => response.ok ? response : fetch('data/dashboard_data.json', {cache: 'no-store'}))
-  .then(r => r.json())
+  .then(async response => {
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `看板 API 请求失败 (${response.status})`);
+    return payload;
+  })
   .then(data => {
-    renderCards(data);
+    renderModelSwitcher(data);
     renderModelComparison(data);
     renderCharts(data);
     renderKeywordHistory(data);

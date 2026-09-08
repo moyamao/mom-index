@@ -818,7 +818,9 @@ def _to_analysis_like(row: Dict) -> SimpleNamespace:
     engine = row.get("analysis_engine") or "rules"
     content_type = "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion")
     return SimpleNamespace(
+        post_id=row.get("post_id", "") or "",
         title=row.get("title", "") or "",
+        platform=row.get("platform", "") or "unknown",
         newbie_score=float(row.get("newbie_score") or 0),
         level=row.get("level", "") or "",
         reasoning="",
