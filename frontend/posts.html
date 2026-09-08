@@ -543,6 +543,11 @@ function renderPosts(items) {
     const analyses = item.analyses || [];
     const typeLabels = [...new Set(analyses.map(a => a.content_type === 'news' ? '资讯' : a.content_type === 'spam' ? '无效' : '个人观点'))];
     const intentLabels = [...new Set(analyses.filter(a => a.content_type !== 'news').map(a => INTENT_NAMES[a.intent] || '观望'))];
+    const scoredAnalyses = analyses.filter(a => a.analysis_engine === 'llm' && a.content_type === 'opinion');
+    const averageSentiment = scoredAnalyses.length
+      ? Math.round(scoredAnalyses.reduce((sum, a) => sum + Number(a.sentiment_score || 0), 0) / scoredAnalyses.length * 100)
+      : null;
+    const averageLabel = averageSentiment == null ? '仅计数' : averageSentiment >= 15 ? '贪婪' : averageSentiment <= -15 ? '恐慌' : '中性';
     return `
     <article class="post-card">
       <div class="post-head">
@@ -557,8 +562,8 @@ function renderPosts(items) {
           </div>
         </div>
         <div class="score-box">
-          <div class="score-main">${item.model_count}/${modelProfiles.length}</div>
-          <div class="score-sub">模型成功判定</div>
+          <div class="score-main">${averageSentiment == null ? '资讯' : `${averageSentiment >= 0 ? '+' : ''}${averageSentiment}`}</div>
+          <div class="score-sub">${averageLabel}${averageSentiment == null ? '' : ' · 双模型情绪均值'}</div>
         </div>
       </div>
 
