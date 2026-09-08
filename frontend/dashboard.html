@@ -60,6 +60,8 @@ body {
 .model-switcher { display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px; }
 .model-switcher button { background:#1e293b;color:#cbd5e1;border:1px solid #475569;border-radius:999px;padding:9px 14px;cursor:pointer; }
 .model-switcher button.active { background:#1d4ed8;border-color:#60a5fa;color:#fff; }
+.history-toolbar { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-6px 0 18px;color:#94a3b8;font-size:12px; }
+.history-toolbar select { background:#172033;color:#e2e8f0;border:1px solid #475569;border-radius:9px;padding:8px 12px;font-size:13px; }
 
 /* 指数卡片网格 */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 32px; }
@@ -442,6 +444,10 @@ body {
 
 <div class="container">
   <div class="model-switcher" id="model-switcher"></div>
+  <div class="history-toolbar" id="history-toolbar">
+    <span>查看历史日期</span>
+    <select id="history-date"></select>
+  </div>
   <!-- 各板块指数卡片 -->
   <div class="cards" id="cards"></div>
 
@@ -691,17 +697,31 @@ function renderModelSwitcher(data) {
     return;
   }
   let active = profiles[0].profile;
+  let activeDate = data.model_comparison?.comparison_date || '';
   const render = () => {
     switcher.replaceChildren(...profiles.map(item => {
       const button = document.createElement('button');
       button.className = item.profile === active ? 'active' : '';
       button.textContent = `${item.profile} · ${item.completed_at || '-'}`;
-      button.onclick = () => { active = item.profile; render(); };
+      button.onclick = () => {
+        active = item.profile;
+        activeDate = (data.model_daily_snapshots?.[active] || []).at(-1)?.date || '';
+        render();
+      };
       return button;
     }));
     const selected = profiles.find(item => item.profile === active);
+    const snapshots = data.model_daily_snapshots?.[selected.profile] || [];
+    const dateSelect = document.getElementById('history-date');
+    if (!activeDate) activeDate = snapshots.at(-1)?.date || '';
+    dateSelect.innerHTML = snapshots.slice().reverse().map(snapshot =>
+      `<option value="${snapshot.date}" ${snapshot.date === activeDate ? 'selected' : ''}>${snapshot.date}${snapshot.date === snapshots.at(-1)?.date ? '（最新）' : ''}</option>`
+    ).join('');
+    dateSelect.onchange = () => { activeDate = dateSelect.value; render(); };
+    document.getElementById('history-toolbar').style.display = snapshots.length ? 'flex' : 'none';
+    const snapshot = snapshots.find(item => item.date === activeDate);
     const history = data.model_sector_history?.[selected.profile] || {};
-    const comparisonDate = selected.comparison_date || data.model_comparison?.comparison_date || '';
+    const comparisonDate = activeDate || selected.comparison_date || data.model_comparison?.comparison_date || '';
     const latestChanges = {};
     Object.entries(history).forEach(([sector, records]) => {
       const eligible = records.filter(record => record.date <= comparisonDate);
@@ -717,9 +737,9 @@ function renderModelSwitcher(data) {
     });
     renderCards({
       latest: {
-        date: selected.completed_at || '-',
+        date: comparisonDate || selected.completed_at || '-',
         comparison_date: comparisonDate,
-        sectors: selected.sectors || {},
+        sectors: snapshot?.sectors || selected.sectors || {},
       },
       latest_changes: latestChanges,
     });

@@ -1280,3 +1280,69 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
         }
     finally:
         conn.close()
+
+
+def fetch_model_daily_snapshots(days: int = 30) -> Dict:
+    """Return complete daily sector cards per model profile for history browsing."""
+    if not mysql_enabled():
+        return {}
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            start_day = beijing_now().date() - timedelta(days=max(1, days) - 1)
+            cur.execute(
+                """
+                SELECT a.id, a.analysis_profile, a.sector, a.platform, a.post_id,
+                       a.title, a.newbie_score, a.level, a.sentiment_score,
+                       a.sentiment_label, a.sentiment_confidence, a.intent,
+                       a.intent_strength, a.position_status, a.market_outlook,
+                       a.content_type, a.analysis_engine, p.post_datetime
+                FROM mom_index_analysis a
+                INNER JOIN mom_index_posts p
+                  ON p.run_id=a.run_id AND p.sector=a.sector
+                 AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+                WHERE a.analysis_profile NOT IN ('legacy', 'rules')
+                  AND a.analysis_engine='llm' AND p.post_datetime >= %s
+                ORDER BY a.id DESC
+                """,
+                (start_day,),
+            )
+            rows = cur.fetchall()
+
+        seen = set()
+        grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+        for row in rows:
+            day = _row_day(row)
+            if day is None:
+                continue
+            key = (row["analysis_profile"], day, row["sector"], row["platform"], row["post_id"])
+            if key in seen:
+                continue
+            seen.add(key)
+            grouped[row["analysis_profile"]][day.isoformat()][row["sector"]].append(
+                _to_analysis_like(row)
+            )
+
+        from analyzer.index_calculator import compute_sector_index
+        result = {}
+        for profile, dates in grouped.items():
+            snapshots = []
+            for day_key, sectors in sorted(dates.items()):
+                sector_results = {}
+                for sector in MODEL_SECTOR_ORDER:
+                    items = sectors.get(sector)
+                    if not items:
+                        continue
+                    value = compute_sector_index(items)
+                    value.setdefault("details", {})["analysis_window"] = {
+                        "mode": "day",
+                        "label": f"北京时间 {day_key}",
+                        "sample_count": len(items),
+                    }
+                    sector_results[sector] = value
+                snapshots.append({"date": day_key, "sectors": sector_results})
+            result[profile] = snapshots
+        return result
+    finally:
+        conn.close()
