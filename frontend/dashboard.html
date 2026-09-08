@@ -491,6 +491,7 @@ const SECTOR_NAMES = {
   semiconductor: '半导体',
   storage: '存储'
 };
+const SECTOR_ORDER = ['nasdaq', 'gold', 'cpo', 'semiconductor', 'storage'];
 
 const SECTOR_COLORS = {
   nasdaq: '#06b6d4',
@@ -550,7 +551,8 @@ function renderCards(data) {
   document.getElementById('update-time').textContent = 
     `更新于 ${latest.date}`;
 
-  container.innerHTML = Object.entries(latest.sectors).map(([key, sector]) => {
+  container.innerHTML = SECTOR_ORDER.filter(key => latest.sectors[key]).map(key => {
+    const sector = latest.sectors[key];
     const d = sector.details || {};
     const change = latestChanges[key] || {};
     const delta = change.delta;
@@ -665,10 +667,10 @@ function renderModelComparison(data) {
     title.textContent = `${item.profile} · ${item.model_name}`;
     const meta = document.createElement('div');
     meta.className = 'model-meta';
-    meta.textContent = `${item.completed_at || '-'} · 总样本 ${item.analyzed_posts}/${item.requested_posts} · LLM ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 提示词 ${item.prompt_version}`;
+    meta.textContent = `${item.completed_at || '-'} · 原批次 ${item.analyzed_posts}/${item.requested_posts} · LLM成功 ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 公平比较 ${item.comparison_posts || 0}帖 · 提示词 ${item.prompt_version}`;
     const sectors = document.createElement('div');
     sectors.className = 'model-sectors';
-    sectors.textContent = Object.entries(item.sectors || {}).map(([key, value]) => `${SECTOR_NAMES[key] || key} ${value.index}`).join('　');
+    sectors.textContent = SECTOR_ORDER.filter(key => item.sectors?.[key]).map(key => `${SECTOR_NAMES[key] || key} ${item.sectors[key].index}`).join('　');
     card.append(title, meta, sectors);
     grid.append(card);
   });

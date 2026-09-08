@@ -54,7 +54,7 @@ body {
 }
 .filters-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
 }
 .filter-item label {
@@ -261,6 +261,28 @@ body {
   line-height: 1.7;
   font-size: 14px;
 }
+.model-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.model-result {
+  background: rgba(15,23,42,0.48);
+  border: 1px solid #334155;
+  border-top: 3px solid #38bdf8;
+  border-radius: 12px;
+  padding: 14px;
+}
+.model-result.fallback { border-top-color: #f59e0b; }
+.model-result-head { display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px; }
+.model-result-name { font-size:15px;font-weight:750;color:#f8fafc; }
+.model-result-engine { font-size:11px;color:#94a3b8; }
+.model-metrics { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
+.model-metric { border:1px solid #27364c;border-radius:8px;padding:8px; }
+.model-metric span { display:block;color:#64748b;font-size:10px;margin-bottom:3px; }
+.model-metric strong { color:#e2e8f0;font-size:13px; }
+.model-reasoning { color:#94a3b8;font-size:12px;line-height:1.6;margin-top:10px; }
 .empty, .loading {
   text-align: center;
   color: #94a3b8;
@@ -287,7 +309,7 @@ body {
 <body>
 <div class="header">
   <h1>帖子明细</h1>
-  <div class="subtitle">按平台查看原帖、分析标签、情绪、买卖意图与判定理由</div>
+  <div class="subtitle">同一帖子并列查看 14B / 27B 的情绪、仓位、预期与判定理由</div>
   <div class="header-links">
     <a class="jump-link" href="dashboard.html">返回总览</a>
   </div>
@@ -315,6 +337,10 @@ body {
       <div class="filter-item">
         <label>意图</label>
         <select id="intent-filter"></select>
+      </div>
+      <div class="filter-item">
+        <label>模型覆盖</label>
+        <select id="model-filter"></select>
       </div>
       <div class="filter-item">
         <label>搜索</label>
@@ -354,6 +380,7 @@ const INTENT_NAMES = {
 };
 
 let allItems = [];
+let modelProfiles = [];
 
 function el(id) {
   return document.getElementById(id);
@@ -433,9 +460,16 @@ function buildSelectOptions(select, values, allLabel = '全部') {
     .join('');
 }
 
-function renderSummary(items, counts) {
+function renderSummary(items) {
+  const counts = items.reduce((acc, item) => {
+    acc[item.platform] = (acc[item.platform] || 0) + 1;
+    return acc;
+  }, {});
+  const shared = items.filter(item => item.model_count >= modelProfiles.length && modelProfiles.length > 1).length;
   const chips = [
     `<span class="summary-chip">总帖子 ${items.length}</span>`,
+    `<span class="summary-chip">共同成功判定 ${shared}</span>`,
+    `<span class="summary-chip">模型 ${modelProfiles.join(' / ') || '暂无'}</span>`,
     ...Object.entries(counts || {}).sort((a, b) => b[1] - a[1]).map(
       ([platform, count]) => `<span class="summary-chip">${PLATFORM_NAMES[platform] || platform} ${count}</span>`
     )
@@ -449,6 +483,7 @@ function currentFilters() {
     sector: el('sector-filter').value,
     contentType: el('level-filter').value,
     intent: el('intent-filter').value,
+    model: el('model-filter').value,
     q: el('search-input').value.trim().toLowerCase(),
   };
 }
@@ -458,18 +493,45 @@ function filterItems(items) {
   return items.filter(item => {
     if (f.platform !== 'all' && item.platform !== f.platform) return false;
     if (f.sector !== 'all' && item.sector !== f.sector) return false;
-    const contentType = item.content_type || (item.level === '资讯帖' ? 'news' : item.level === '垃圾帖' ? 'spam' : 'opinion');
-    if (f.contentType !== 'all' && contentType !== f.contentType) return false;
-    if (f.intent !== 'all' && item.intent !== f.intent) return false;
+    const analyses = item.analyses || [];
+    if (f.contentType !== 'all' && !analyses.some(a => a.content_type === f.contentType)) return false;
+    if (f.intent !== 'all' && !analyses.some(a => a.intent === f.intent)) return false;
+    if (f.model === 'both' && item.model_count < modelProfiles.length) return false;
+    if (f.model !== 'all' && f.model !== 'both' && !analyses.some(a => a.profile === f.model && a.analysis_engine === 'llm')) return false;
     if (f.q) {
       const hay = [
-        item.title, item.content, item.author, item.keyword, item.reasoning,
-        ...(item.key_signals || []),
+        item.title, item.content, item.author, item.keyword,
+        ...analyses.flatMap(a => [a.profile, a.model_name, a.reasoning]),
       ].join(' ').toLowerCase();
       if (!hay.includes(f.q)) return false;
     }
     return true;
   });
+}
+
+const POSITION_NAMES = {holding:'持有', trapped:'被套', none:'空仓', unknown:'未知'};
+const OUTLOOK_NAMES = {bullish:'看涨', bearish:'看跌', sideways:'震荡', unknown:'未知'};
+
+function renderAnalysis(analysis) {
+  const isLlm = analysis.analysis_engine === 'llm';
+  const isNews = analysis.content_type === 'news';
+  return `
+    <section class="model-result ${isLlm ? '' : 'fallback'}">
+      <div class="model-result-head">
+        <div>
+          <div class="model-result-name">${escapeHtml(analysis.profile)}</div>
+          <div class="model-result-engine">${escapeHtml(analysis.model_name || '未记录模型')} · 批次 ${analysis.batch_id || '-'} · ${escapeHtml(analysis.prompt_version || '-')}</div>
+        </div>
+        <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM 判定' : '规则回退'}</span>
+      </div>
+      <div class="model-metrics">
+        <div class="model-metric"><span>内容类型</span><strong>${isNews ? '资讯 · 仅计数' : '个人观点'}</strong></div>
+        <div class="model-metric"><span>情绪</span><strong>${isNews ? '不参与' : escapeHtml(fmtSentiment(analysis.sentiment_score))}</strong></div>
+        <div class="model-metric"><span>交易意图</span><strong>${escapeHtml(INTENT_NAMES[analysis.intent] || '观望')} · ${Number(analysis.intent_strength || 0).toFixed(2)}</strong></div>
+        <div class="model-metric"><span>仓位 / 预期</span><strong>${escapeHtml(POSITION_NAMES[analysis.position_status] || '未知')} / ${escapeHtml(OUTLOOK_NAMES[analysis.market_outlook] || '未知')}</strong></div>
+      </div>
+      <div class="model-reasoning">置信度 ${Number(analysis.sentiment_confidence || 0).toFixed(2)}${analysis.reasoning ? ` · ${escapeHtml(analysis.reasoning)}` : ''}</div>
+    </section>`;
 }
 
 function renderPosts(items) {
@@ -487,15 +549,12 @@ function renderPosts(items) {
           <div class="badges">
             <span class="badge platform">${escapeHtml(PLATFORM_NAMES[item.platform] || item.platform)}</span>
             <span class="badge sector">${escapeHtml(SECTOR_NAMES[item.sector] || item.sector)}</span>
-            <span class="badge level">${item.content_type === 'news' || item.level === '资讯帖' ? '资讯' : item.content_type === 'spam' || item.level === '垃圾帖' ? '无效' : '个人观点'}</span>
-            <span class="badge ${intentBadge(item.intent)}">${escapeHtml(INTENT_NAMES[item.intent] || '观望')}</span>
             ${item.keyword ? `<span class="badge sector">关键词: ${escapeHtml(item.keyword)}</span>` : ''}
-            ${item.is_mock ? `<span class="badge intent-sell">模拟数据</span>` : ''}
           </div>
         </div>
         <div class="score-box">
-          <div class="score-main">${item.content_type === 'news' || item.level === '资讯帖' ? '资讯' : escapeHtml(fmtSentiment(item.sentiment_score))}</div>
-          <div class="score-sub">${item.content_type === 'news' || item.level === '资讯帖' ? '仅计数' : '个人观点'}</div>
+          <div class="score-main">${item.model_count}/${modelProfiles.length}</div>
+          <div class="score-sub">模型成功判定</div>
         </div>
       </div>
 
@@ -508,34 +567,14 @@ function renderPosts(items) {
           <div class="meta-label">发布时间</div>
           <div class="meta-value">${escapeHtml(item.source_datetime || item.published_at || item.date || '未知')}</div>
         </div>
-        <div class="meta-item">
-          <div class="meta-label">情绪</div>
-          <div class="meta-value">${escapeHtml(fmtSentiment(item.sentiment_score))}</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">意图强度</div>
-          <div class="meta-value">${Number(item.intent_strength || 0).toFixed(2)}</div>
-        </div>
+        <div class="meta-item"><div class="meta-label">帖子 ID</div><div class="meta-value">${escapeHtml(item.post_id || '未知')}</div></div>
+        <div class="meta-item"><div class="meta-label">判定覆盖</div><div class="meta-value">${(item.analyses || []).map(a => `${escapeHtml(a.profile)}(${a.analysis_engine === 'llm' ? 'LLM' : '回退'})`).join(' / ')}</div></div>
       </div>
 
       ${renderContent(item)}
 
-      ${(item.key_signals || []).length ? `
-        <div class="section-title">关键命中信号</div>
-        <div class="signal-list">
-          ${(item.key_signals || []).map(signal => `<span class="signal-chip">${escapeHtml(signal)}</span>`).join('')}
-        </div>
-      ` : ''}
-
-      ${item.reasoning ? `
-        <div class="section-title">判定理由</div>
-        <details class="fold">
-          <summary>展开规则判定说明</summary>
-          <div class="fold-body">
-            <div class="reasoning">${escapeHtml(item.reasoning)}</div>
-          </div>
-        </details>
-      ` : ''}
+      <div class="section-title">模型判定对照</div>
+      <div class="model-results">${(item.analyses || []).map(renderAnalysis).join('')}</div>
     </article>
   `).join('');
 }
@@ -544,22 +583,32 @@ function rerender() {
   renderPosts(filterItems(allItems));
 }
 
-fetch('data/platform_posts.json')
+fetch('/api/post-model-comparison', {cache: 'no-store'})
   .then(resp => resp.json())
   .then(data => {
+    if (data.error) throw new Error(data.error);
     allItems = data.items || [];
-    renderSummary(allItems, data.platform_counts || {});
+    modelProfiles = data.profiles || [];
+    renderSummary(allItems);
 
-    buildSelectOptions(el('platform-filter'), Object.keys(data.platform_counts || {}).map(
+    const platformCounts = allItems.reduce((acc, item) => {
+      acc[item.platform] = (acc[item.platform] || 0) + 1;
+      return acc;
+    }, {});
+
+    buildSelectOptions(el('platform-filter'), Object.keys(platformCounts).map(
       key => key
-    ).sort((a, b) => (data.platform_counts[b] || 0) - (data.platform_counts[a] || 0)), '全部平台');
+    ).sort((a, b) => (platformCounts[b] || 0) - (platformCounts[a] || 0)), '全部平台');
     buildSelectOptions(el('sector-filter'), Object.keys(SECTOR_NAMES), '全部板块');
     el('level-filter').innerHTML = '<option value="all">全部类型</option><option value="opinion">个人观点</option><option value="news">资讯</option><option value="spam">无效</option>';
     el('intent-filter').innerHTML = Object.entries(INTENT_NAMES).map(
       ([value, label]) => `<option value="${value}">${label}</option>`
     ).join('');
+    el('model-filter').innerHTML = '<option value="all">全部帖子</option>'
+      + (modelProfiles.length > 1 ? '<option value="both">两个模型均成功</option>' : '')
+      + modelProfiles.map(profile => `<option value="${escapeHtml(profile)}">${escapeHtml(profile)} 成功</option>`).join('');
 
-    ['platform-filter', 'sector-filter', 'level-filter', 'intent-filter'].forEach(id => {
+    ['platform-filter', 'sector-filter', 'level-filter', 'intent-filter', 'model-filter'].forEach(id => {
       el(id).addEventListener('change', rerender);
     });
     el('search-input').addEventListener('input', rerender);
@@ -567,8 +616,8 @@ fetch('data/platform_posts.json')
     rerender();
   })
   .catch(err => {
-    el('summary').innerHTML = `<div class="empty">platform_posts.json 加载失败: ${err.message}</div>`;
-    el('posts').innerHTML = '<div class="empty">请先运行 pipeline.py 生成帖子明细数据</div>';
+    el('summary').innerHTML = `<div class="empty">模型帖子接口加载失败: ${escapeHtml(err.message)}</div>`;
+    el('posts').innerHTML = '<div class="empty">请确认 web_server.py 正在运行且 MySQL 可访问</div>';
   });
 </script>
 </body>

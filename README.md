@@ -82,6 +82,9 @@ python pipeline.py
 # 启动带关键词管理 API 的 Web 服务（默认 8081）
 python3 scripts/web_server.py
 
+# Mac mini 后台重启并检查 Web 服务
+./scripts/restart_web.sh
+
 # 浏览器打开
 # http://localhost:8081/dashboard.html
 ```

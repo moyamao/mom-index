@@ -1,7 +1,12 @@
 import unittest
 from types import SimpleNamespace
 
-from storage.mysql_store import _iter_analysis_rows, _to_analysis_like
+from storage.mysql_store import (
+    _analysis_key,
+    _iter_analysis_rows,
+    _shared_llm_keys,
+    _to_analysis_like,
+)
 
 
 class ModelComparisonRowTest(unittest.TestCase):
@@ -50,6 +55,32 @@ class ModelComparisonRowTest(unittest.TestCase):
         self.assertEqual(opinion.sentiment_label, "fear")
         self.assertEqual(opinion.sentiment_confidence, 1.0)
         self.assertEqual(news.content_type, "news")
+
+    def test_shared_keys_require_same_post_and_successful_llm(self):
+        rows = {
+            "mini-14b": [
+                {"sector": "gold", "platform": "xueqiu", "post_id": "1", "analysis_engine": "llm"},
+                {"sector": "gold", "platform": "xueqiu", "post_id": "2", "analysis_engine": "rules"},
+            ],
+            "macbook-27b": [
+                {"sector": "gold", "platform": "xueqiu", "post_id": "1", "analysis_engine": "llm"},
+                {"sector": "gold", "platform": "xueqiu", "post_id": "2", "analysis_engine": "llm"},
+            ],
+        }
+
+        self.assertEqual(
+            _shared_llm_keys(rows),
+            {("gold", "xueqiu", "1")},
+        )
+
+    def test_content_hash_is_used_when_post_id_is_missing(self):
+        row = {
+            "sector": "nasdaq",
+            "platform": "xiaohongshu",
+            "post_id": "",
+            "content_hash": "abc123",
+        }
+        self.assertEqual(_analysis_key(row), ("nasdaq", "xiaohongshu", "abc123"))
 
 
 if __name__ == "__main__":

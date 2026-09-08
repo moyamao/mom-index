@@ -66,6 +66,13 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": f"读取最新模型结果失败: {exc}"})
             return
+        if path == "/api/post-model-comparison":
+            try:
+                from storage.mysql_store import fetch_post_model_comparison
+                self._json(200, fetch_post_model_comparison())
+            except Exception as exc:
+                self._json(500, {"error": f"读取帖子模型判定失败: {exc}"})
+            return
         if path == "/api/keywords":
             try:
                 self._json(200, {"items": list_keyword_records()})

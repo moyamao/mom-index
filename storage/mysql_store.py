@@ -980,41 +980,83 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
         conn.close()
 
 
+MODEL_SECTOR_ORDER = ("nasdaq", "gold", "cpo", "semiconductor", "storage")
+
+
+def _analysis_key(row: Dict):
+    """Build a stable cross-batch identity for one collected post."""
+    sector = str(row.get("sector") or "").strip()
+    platform = str(row.get("platform") or "").strip()
+    post_id = str(row.get("post_id") or "").strip()
+    content_hash = str(row.get("content_hash") or "").strip()
+    identity = post_id or content_hash
+    return (sector, platform, identity) if sector and platform and identity else None
+
+
+def _latest_model_batches(cur) -> List[Dict]:
+    cur.execute(
+        """
+        SELECT b.id, b.profile, b.model_name, b.prompt_version, b.completed_at,
+               b.requested_posts, b.analyzed_posts, b.llm_posts, b.failed_posts
+        FROM mom_index_analysis_batches b
+        INNER JOIN (
+            SELECT profile, MAX(id) AS latest_id
+            FROM mom_index_analysis_batches WHERE status='completed'
+            GROUP BY profile
+        ) latest ON latest.latest_id=b.id
+        WHERE b.profile NOT IN ('legacy', 'rules')
+        ORDER BY b.completed_at DESC
+        """
+    )
+    return cur.fetchall()
+
+
+def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
+    cur.execute(
+        """SELECT run_id, sector, post_id, title, platform, newbie_score,
+                  newbie_confidence, level, sentiment_score, sentiment_label,
+                  sentiment_confidence, intent, intent_strength, position_status,
+                  market_outlook, content_type, analysis_engine, reasoning,
+                  content_hash
+           FROM mom_index_analysis WHERE batch_id=%s""",
+        (batch_id,),
+    )
+    return cur.fetchall()
+
+
+def _shared_llm_keys(rows_by_profile: Dict[str, List[Dict]]) -> set:
+    """Only rows successfully judged by every model are comparable."""
+    key_sets = []
+    for rows in rows_by_profile.values():
+        keys = {
+            key for row in rows
+            if row.get("analysis_engine") == "llm" and (key := _analysis_key(row))
+        }
+        key_sets.append(keys)
+    return set.intersection(*key_sets) if key_sets else set()
+
+
 def fetch_model_comparison() -> Dict:
-    """Return the newest completed batch per profile without mixing model coverage."""
+    """Compare newest model batches on their exact shared, successful LLM sample."""
     if not mysql_enabled():
         return {"profiles": []}
     conn = _connect()
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            cur.execute(
-                """
-                SELECT b.id, b.profile, b.model_name, b.prompt_version, b.completed_at,
-                       b.requested_posts, b.analyzed_posts, b.llm_posts, b.failed_posts
-                FROM mom_index_analysis_batches b
-                INNER JOIN (
-                    SELECT profile, MAX(id) AS latest_id
-                    FROM mom_index_analysis_batches WHERE status='completed'
-                    GROUP BY profile
-                ) latest ON latest.latest_id=b.id
-                ORDER BY b.completed_at DESC
-                """
-            )
-            batches = cur.fetchall()
+            batches = _latest_model_batches(cur)
+            rows_by_profile = {
+                batch["profile"]: _batch_analysis_rows(cur, batch["id"])
+                for batch in batches
+            }
+            shared_keys = _shared_llm_keys(rows_by_profile)
             profiles = []
             from analyzer.index_calculator import compute_sector_index
             for batch in batches:
-                cur.execute(
-                    """SELECT sector, post_id, title, platform, newbie_score,
-                              newbie_confidence, level, sentiment_score, sentiment_label,
-                              sentiment_confidence, intent, intent_strength, position_status,
-                              market_outlook, content_type, analysis_engine, reasoning
-                       FROM mom_index_analysis WHERE batch_id=%s""",
-                    (batch["id"],),
-                )
                 by_sector = defaultdict(list)
-                for row in cur.fetchall():
+                for row in rows_by_profile[batch["profile"]]:
+                    if _analysis_key(row) not in shared_keys:
+                        continue
                     by_sector[row["sector"]].append(_to_analysis_like(row))
                 completed = batch.get("completed_at")
                 profiles.append({
@@ -1026,8 +1068,115 @@ def fetch_model_comparison() -> Dict:
                     "analyzed_posts": batch["analyzed_posts"],
                     "llm_posts": batch["llm_posts"],
                     "failed_posts": batch["failed_posts"],
-                    "sectors": {sector: compute_sector_index(items) for sector, items in by_sector.items()},
+                    "comparison_posts": len(shared_keys),
+                    "comparison_scope": "shared-successful-llm-posts",
+                    "sectors": {
+                        sector: compute_sector_index(by_sector[sector])
+                        for sector in MODEL_SECTOR_ORDER if by_sector.get(sector)
+                    },
                 })
-            return {"timezone": "Asia/Shanghai", "profiles": profiles}
+            return {
+                "timezone": "Asia/Shanghai",
+                "comparison_scope": "两个最新批次中，同平台、同板块、同帖子且均由 LLM 成功分析的交集",
+                "comparison_posts": len(shared_keys),
+                "profiles": profiles,
+            }
+    finally:
+        conn.close()
+
+
+def fetch_post_model_comparison() -> Dict:
+    """Return the union of posts in latest model batches, grouped by post identity."""
+    if not mysql_enabled():
+        return {"profiles": [], "items": []}
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            batches = _latest_model_batches(cur)
+            if not batches:
+                return {"profiles": [], "items": []}
+            placeholders = ",".join(["%s"] * len(batches))
+            cur.execute(
+                f"""
+                SELECT a.batch_id, a.run_id, a.analysis_profile, a.model_name,
+                       a.prompt_version, a.analysis_engine, a.content_hash,
+                       a.sector, a.platform, a.post_id, a.title, a.level,
+                       a.sentiment_score, a.sentiment_label, a.sentiment_confidence,
+                       a.intent, a.intent_strength, a.position_status,
+                       a.market_outlook, a.content_type, a.reasoning,
+                       p.content, p.url, p.author, p.post_date, p.post_datetime,
+                       p.raw_json
+                FROM mom_index_analysis a
+                LEFT JOIN mom_index_posts p
+                  ON p.run_id=a.run_id AND p.sector=a.sector
+                 AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+                WHERE a.batch_id IN ({placeholders})
+                ORDER BY COALESCE(p.post_datetime, a.created_at) DESC, a.id DESC
+                """,
+                tuple(batch["id"] for batch in batches),
+            )
+            rows = cur.fetchall()
+
+        batch_meta = {batch["id"]: batch for batch in batches}
+        grouped = {}
+        for row in rows:
+            key = _analysis_key(row)
+            if not key:
+                continue
+            item = grouped.setdefault(key, {
+                "sector": row.get("sector") or "",
+                "platform": row.get("platform") or "unknown",
+                "post_id": row.get("post_id") or "",
+                "title": row.get("title") or "",
+                "content": row.get("content") or "",
+                "url": row.get("url") or "",
+                "author": row.get("author") or "",
+                "source_datetime": row["post_datetime"].strftime("%Y-%m-%d %H:%M:%S") if row.get("post_datetime") else (row.get("post_date") or ""),
+                "keyword": "",
+                "analyses": {},
+            })
+            try:
+                raw = json.loads(row.get("raw_json") or "{}")
+                item["keyword"] = item["keyword"] or raw.get("keyword", "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+            profile = row.get("analysis_profile") or "unknown"
+            if profile in item["analyses"]:
+                continue
+            meta = batch_meta.get(row.get("batch_id"), {})
+            item["analyses"][profile] = {
+                "profile": profile,
+                "model_name": row.get("model_name") or "",
+                "batch_id": row.get("batch_id"),
+                "completed_at": meta.get("completed_at").strftime("%Y-%m-%d %H:%M:%S") if meta.get("completed_at") else "",
+                "prompt_version": row.get("prompt_version") or "",
+                "analysis_engine": row.get("analysis_engine") or "rules",
+                "content_type": "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion"),
+                "sentiment_score": float(row.get("sentiment_score") or 0),
+                "sentiment_label": row.get("sentiment_label") or "neutral",
+                "sentiment_confidence": float(row.get("sentiment_confidence") or 0),
+                "intent": row.get("intent") or "neutral",
+                "intent_strength": float(row.get("intent_strength") or 0),
+                "position_status": row.get("position_status") or "unknown",
+                "market_outlook": row.get("market_outlook") or "unknown",
+                "reasoning": row.get("reasoning") or "",
+            }
+
+        items = list(grouped.values())
+        profile_order = {batch["profile"]: index for index, batch in enumerate(reversed(batches))}
+        for item in items:
+            item["analyses"] = sorted(
+                item["analyses"].values(),
+                key=lambda value: profile_order.get(value["profile"], 99),
+            )
+            item["model_count"] = sum(a["analysis_engine"] == "llm" for a in item["analyses"])
+            item["content_length"] = len(item["content"])
+        items.sort(key=lambda item: item.get("source_datetime") or "", reverse=True)
+        return {
+            "timezone": "Asia/Shanghai",
+            "profiles": [batch["profile"] for batch in reversed(batches)],
+            "items": items,
+        }
     finally:
         conn.close()
