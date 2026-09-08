@@ -28,7 +28,9 @@ def build_platform_trends(rows):
     series = defaultdict(list)
     for (profile, sector, platform, period, bucket), items in sorted(groups.items()):
         count = len(items)
-        mean = sum(float(x['sentiment_score']) for x in items) / count
+        # LLM scores are stored on [-1, 1]; expose the same [-100, 100]
+        # sentiment index used by the dashboard.
+        mean = sum(float(x['sentiment_score']) for x in items) / count * 100
         records = series[(profile, sector, platform, period)]
         current_dt = datetime.fromisoformat(bucket)
         step = timedelta(hours=1) if period == 'hourly' else timedelta(days=7 if period == 'weekly' else 1)
@@ -41,7 +43,7 @@ def build_platform_trends(rows):
                         'buy_count': sum(x['intent'] == 'buy' for x in items),
                         'sell_count': sum(x['intent'] == 'sell' for x in items)})
     return {'timezone': 'Asia/Shanghai', 'time_basis': 'post_datetime',
-            'note': '按模型与发布时间分组；缺失时段不补零；change仅比较连续时段；均值为全部有效帖的有符号情绪分。',
+            'note': '按模型与发布时间分组；缺失时段不补零；change仅比较连续时段；情绪指数范围为 -100 至 +100。',
             'series': [{'analysis_profile': profile, 'sector': s, 'platform': p, 'period': t, 'records': r}
                        for (profile, s, p, t), r in sorted(series.items())]}
 

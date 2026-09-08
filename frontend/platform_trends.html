@@ -6,7 +6,7 @@ body{background:#0f172a;color:#e2e8f0;font-family:sans-serif;margin:24px}a{color
 </style><main><a href="dashboard.html">返回看板</a><h1>平台情绪变化</h1>
 <p>北京时间；按帖子发布时间汇总。负分偏恐惧，正分偏贪婪，0 为中性。样本量少时请谨慎解读。</p>
 <select id="profile"></select><select id="sector"></select><select id="period"><option value="daily">每日</option><option value="hourly">每小时</option><option value="weekly">每周</option></select>
-<p id="status"></p><div class="scroll"><table><thead><tr><th>时间</th><th>平台</th><th>样本</th><th>情绪均值</th><th>较上一时段</th><th>买入/卖出帖</th></tr></thead><tbody id="rows"></tbody></table></div></main>
+<p id="status"></p><div class="scroll"><table><thead><tr><th>时间</th><th>平台</th><th>样本</th><th>情绪指数（-100~+100）</th><th>变化（点）</th><th>买入/卖出帖</th></tr></thead><tbody id="rows"></tbody></table></div></main>
 <script>
 const names={nasdaq:'纳斯达克',gold:'黄金',cpo:'CPO',semiconductor:'半导体',storage:'存储',guba:'股吧',xiaohongshu:'小红书',weibo:'微博',xueqiu:'雪球',wechat:'微信'};
 let series=[];
