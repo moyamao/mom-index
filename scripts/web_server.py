@@ -33,10 +33,11 @@ def _dashboard_payload():
     dashboard_path = os.path.join(ROOT, "data", "dashboard_data.json")
     with open(dashboard_path, "r", encoding="utf-8") as handle:
         dashboard = json.load(handle)
-    from analyzer.platform_trends import fetch_platform_trends
+    from analyzer.platform_trends import fetch_model_sector_history, fetch_platform_trends
     from storage.mysql_store import fetch_model_comparison
     dashboard["model_comparison"] = fetch_model_comparison()
     dashboard["platform_sentiment_trends"] = fetch_platform_trends()
+    dashboard["model_sector_history"] = fetch_model_sector_history()
     return dashboard
 
 

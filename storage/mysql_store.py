@@ -1093,7 +1093,7 @@ def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
                       AND p.platform=mom_index_analysis.platform
                       AND mom_index_analysis.post_id <> ''
                       AND p.post_id=mom_index_analysis.post_id) AS post_datetime
-           FROM mom_index_analysis WHERE batch_id=%s""",
+           FROM mom_index_analysis WHERE batch_id=%s ORDER BY id DESC""",
         (batch_id,),
     )
     return cur.fetchall()
@@ -1138,11 +1138,11 @@ def fetch_model_comparison() -> Dict:
             profiles = []
             from analyzer.index_calculator import compute_sector_index
             for batch in batches:
-                unique_rows = {
-                    _analysis_key(row): row
-                    for row in rows_by_profile[batch["profile"]]
-                    if _analysis_key(row) in shared_keys and row.get("analysis_engine") == "llm"
-                }
+                unique_rows = {}
+                for row in rows_by_profile[batch["profile"]]:
+                    key = _analysis_key(row)
+                    if key in shared_keys and row.get("analysis_engine") == "llm":
+                        unique_rows.setdefault(key, row)
                 by_sector = defaultdict(list)
                 for row in unique_rows.values():
                     by_sector[row["sector"]].append(_to_analysis_like(row))

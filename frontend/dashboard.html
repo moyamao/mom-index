@@ -510,6 +510,7 @@ const PLATFORM_NAMES = {
 };
 
 let keywordCharts = [];
+let sectorCharts = [];
 
 function getEmoji(idx) {
   if (idx >= 15) return '🔴';
@@ -618,7 +619,7 @@ function renderCards(data) {
         <div class="signal">观点 ${d.opinion_posts || 0}帖 · 资讯 ${d.news_posts || 0}帖（资讯不参与情绪）</div>
         <div class="delta-row">
           <div class="delta-chip ${deltaClass}">情绪较前一日 ${deltaLabel}</div>
-          <div style="color:#64748b;">历史兼容 · ${change.points || 0}点</div>
+          <div style="color:#64748b;">历史数据 · ${change.points || 0}日</div>
         </div>
         <!-- LLM 方向性核心指标 -->
         <div style="margin-top:14px; display:flex; gap:8px;">
@@ -699,20 +700,38 @@ function renderModelSwitcher(data) {
       return button;
     }));
     const selected = profiles.find(item => item.profile === active);
+    const history = data.model_sector_history?.[selected.profile] || {};
+    const comparisonDate = selected.comparison_date || data.model_comparison?.comparison_date || '';
+    const latestChanges = {};
+    Object.entries(history).forEach(([sector, records]) => {
+      const eligible = records.filter(record => record.date <= comparisonDate);
+      const current = eligible.find(record => record.date === comparisonDate);
+      const previous = eligible.filter(record => record.date < comparisonDate).at(-1);
+      if (!current) return;
+      latestChanges[sector] = {
+        date: current.date,
+        previous_date: previous?.date || null,
+        delta: previous ? Math.round((current.index - previous.index) * 10) / 10 : null,
+        points: eligible.length,
+      };
+    });
     renderCards({
       latest: {
         date: selected.completed_at || '-',
-        comparison_date: selected.comparison_date || data.model_comparison?.comparison_date || '',
+        comparison_date: comparisonDate,
         sectors: selected.sectors || {},
       },
-      latest_changes: {},
+      latest_changes: latestChanges,
     });
+    renderCharts({sector_history: history});
   };
   render();
 }
 
 function renderCharts(data) {
   const history = data.sector_history || {};
+  sectorCharts.forEach(chart => chart.destroy());
+  sectorCharts = [];
   
   Object.entries(history).forEach(([sector, records]) => {
     const canvasId = `chart-${sector}`;
@@ -722,7 +741,7 @@ function renderCharts(data) {
     const ctx = canvas.getContext('2d');
     const color = SECTOR_COLORS[sector] || '#94a3b8';
     
-    new Chart(ctx, {
+    sectorCharts.push(new Chart(ctx, {
       type: 'line',
       data: {
         labels: records.map(r => r.date.slice(5)), // MM-DD
@@ -774,7 +793,7 @@ function renderCharts(data) {
         // 危险区间背景
         // 通过 annotation 插件可以实现，这里保持简洁
       }
-    });
+    }));
   });
 }
 
@@ -1179,7 +1198,6 @@ fetch('/api/dashboard-data', {cache: 'no-store'})
   .then(data => {
     renderModelSwitcher(data);
     renderModelComparison(data);
-    renderCharts(data);
     renderKeywordHistory(data);
   })
   .catch(err => {
