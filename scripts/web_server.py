@@ -29,17 +29,57 @@ def _parse_keyword_update(payload):
     return sector, keyword, enabled
 
 
+def _apply_latest_model_snapshot(dashboard, comparison, snapshots, model_history):
+    profiles = comparison.get("profiles") or []
+    if not profiles:
+        return
+    selected = profiles[0]
+    profile = selected.get("profile") or ""
+    target_date = comparison.get("comparison_date") or ""
+    profile_snapshots = snapshots.get(profile) or []
+    snapshot = next(
+        (item for item in profile_snapshots if item.get("date") == target_date),
+        profile_snapshots[-1] if profile_snapshots else None,
+    )
+    if not snapshot:
+        return
+    target_date = snapshot.get("date") or target_date
+    dashboard["latest"] = {
+        "date": target_date,
+        "timestamp": selected.get("completed_at") or "",
+        "profile": profile,
+        "sectors": snapshot.get("sectors") or {},
+    }
+    changes = {}
+    for sector, records in (model_history.get(profile) or {}).items():
+        eligible = [item for item in records if item.get("date", "") <= target_date]
+        current = next((item for item in eligible if item.get("date") == target_date), None)
+        previous = next((item for item in reversed(eligible) if item.get("date", "") < target_date), None)
+        if current:
+            changes[sector] = {
+                "date": target_date,
+                "previous_date": previous.get("date") if previous else None,
+                "delta": round(current["index"] - previous["index"], 1) if previous else None,
+                "points": len(eligible),
+            }
+    dashboard["latest_changes"] = changes
+
+
 def _dashboard_payload():
     dashboard_path = os.path.join(ROOT, "data", "dashboard_data.json")
     with open(dashboard_path, "r", encoding="utf-8") as handle:
         dashboard = json.load(handle)
     from analyzer.platform_trends import fetch_model_sector_history, fetch_platform_trends
     from storage.mysql_store import fetch_model_comparison, fetch_model_daily_snapshots
-    dashboard["model_comparison"] = fetch_model_comparison()
-    dashboard["model_daily_snapshots"] = fetch_model_daily_snapshots()
+    comparison = fetch_model_comparison()
+    snapshots = fetch_model_daily_snapshots()
+    dashboard["model_comparison"] = comparison
+    dashboard["model_daily_snapshots"] = snapshots
     dashboard["platform_sentiment_trends"] = fetch_platform_trends()
-    dashboard["model_sector_history"] = fetch_model_sector_history()
+    model_history = fetch_model_sector_history()
+    dashboard["model_sector_history"] = model_history
     dashboard["sector_catalog"] = list_sector_records(enabled_only=True)
+    _apply_latest_model_snapshot(dashboard, comparison, snapshots, model_history)
     return dashboard
 
 
