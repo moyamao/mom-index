@@ -507,6 +507,21 @@ const SECTOR_COLORS = {
   storage: '#fb7185'
 };
 
+function applySectorCatalog(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  SECTOR_ORDER.splice(0, SECTOR_ORDER.length, ...items.map(item => item.code));
+  items.forEach(item => {
+    SECTOR_NAMES[item.code] = item.name || item.code;
+    SECTOR_COLORS[item.code] = item.color || '#94a3b8';
+  });
+  document.querySelector('.legend').innerHTML = items.map(item =>
+    `<div class="legend-item"><div class="legend-dot" style="background:${item.color || '#94a3b8'}"></div>${item.name || item.code}</div>`
+  ).join('');
+  document.getElementById('sector-charts').innerHTML = items.map(item =>
+    `<div class="chart-box"><h3>${item.name || item.code} — 市场情绪走势</h3><canvas id="chart-${item.code}"></canvas></div>`
+  ).join('');
+}
+
 const PLATFORM_NAMES = {
   guba: '股吧',
   weibo: '微博',
@@ -1216,6 +1231,7 @@ fetch('/api/dashboard-data', {cache: 'no-store'})
     return payload;
   })
   .then(data => {
+    applySectorCatalog(data.sector_catalog);
     renderModelSwitcher(data);
     renderModelComparison(data);
     renderKeywordHistory(data);

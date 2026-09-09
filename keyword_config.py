@@ -16,6 +16,16 @@ DEFAULT_KEYWORDS: Dict[str, List[str]] = {
     "storage": ["存储", "存储芯片", "海力士", "SK海力士", "HBM", "美光", "三星", "三星存储", "长鑫存储", "兆易创新", "西部数据", "闪迪"],
 }
 
+DEFAULT_SECTORS = {
+    "nasdaq": {"name": "纳斯达克", "color": "#22d3ee"},
+    "gold": {"name": "黄金", "color": "#fbbf24"},
+    "cpo": {"name": "CPO通信", "color": "#a78bfa"},
+    "semiconductor": {"name": "半导体", "color": "#34d399"},
+    "storage": {"name": "存储", "color": "#fb7185"},
+}
+
+SECTOR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
+
 
 def _parse_list(raw: str) -> List[str]:
     return [item.strip() for item in re.split(r"[,，\n]", raw or "") if item.strip()]
@@ -33,7 +43,44 @@ def get_keywords() -> Dict[str, List[str]]:
     return result
 
 
+def get_sector_catalog() -> List[Dict]:
+    """Return enabled category metadata, with built-ins as an offline fallback."""
+    try:
+        rows = list_sector_records(enabled_only=True)
+        if rows:
+            return rows
+    except Exception:
+        pass
+    return [
+        {"code": code, "name": item["name"], "color": item["color"],
+         "enabled": True, "sort_order": order}
+        for order, (code, item) in enumerate(DEFAULT_SECTORS.items())
+    ]
+
+
 def _ensure_keyword_tables(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mom_index_sectors (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            code VARCHAR(32) NOT NULL,
+            name VARCHAR(64) NOT NULL,
+            color VARCHAR(16) NOT NULL DEFAULT '#94a3b8',
+            enabled TINYINT(1) NOT NULL DEFAULT 1,
+            sort_order INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_mom_index_sector_code (code),
+            KEY idx_mom_index_sectors_enabled (enabled, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
+    for order, (code, item) in enumerate(DEFAULT_SECTORS.items()):
+        cur.execute(
+            """INSERT IGNORE INTO mom_index_sectors
+               (code, name, color, enabled, sort_order) VALUES (%s, %s, %s, 1, %s)""",
+            (code, item["name"], item["color"], order),
+        )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS mom_index_keywords (
@@ -74,8 +121,9 @@ def _get_mysql_keywords() -> Dict[str, List[str]]:
             with conn.cursor() as cur:
                 _ensure_keyword_tables(cur)
                 cur.execute(
-                    """SELECT sector, keyword FROM mom_index_keywords
-                       WHERE enabled=1 ORDER BY sector, sort_order, id"""
+                    """SELECT k.sector, k.keyword FROM mom_index_keywords k
+                       INNER JOIN mom_index_sectors s ON s.code=k.sector AND s.enabled=1
+                       WHERE k.enabled=1 ORDER BY s.sort_order, s.id, k.sort_order, k.id"""
                 )
                 rows = cur.fetchall()
             conn.commit()
@@ -127,8 +175,6 @@ def sync_config_keywords_to_mysql(changed_by: str = "bootstrap") -> int:
 
 
 def set_keyword(sector: str, keyword: str, enabled: bool, changed_by: str = "cli") -> None:
-    if sector not in DEFAULT_KEYWORDS:
-        raise ValueError(f"未知板块: {sector}")
     keyword = keyword.strip()
     if not keyword:
         raise ValueError("关键词不能为空")
@@ -137,6 +183,12 @@ def set_keyword(sector: str, keyword: str, enabled: bool, changed_by: str = "cli
     try:
         with conn.cursor() as cur:
             _ensure_keyword_tables(cur)
+            cur.execute("SELECT enabled FROM mom_index_sectors WHERE code=%s", (sector,))
+            sector_row = cur.fetchone()
+            if not sector_row:
+                raise ValueError(f"未知板块: {sector}")
+            if enabled and not sector_row["enabled"]:
+                raise ValueError(f"板块已停用: {sector}")
             cur.execute(
                 """INSERT INTO mom_index_keywords (sector, keyword, enabled)
                    VALUES (%s, %s, %s)
@@ -173,6 +225,58 @@ def list_keyword_records() -> List[Dict]:
                    FROM mom_index_keywords ORDER BY sector, sort_order, id"""
             )
             rows = cur.fetchall()
+        return [
+            {**row, "enabled": bool(row["enabled"]),
+             "updated_at": row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else ""}
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def set_sector(code: str, name: str, color: str, enabled: bool) -> None:
+    code = code.strip().lower()
+    name = name.strip()
+    color = color.strip().lower() or "#94a3b8"
+    if not SECTOR_CODE_RE.fullmatch(code):
+        raise ValueError("类目编码需以小写字母开头，仅允许小写字母、数字和下划线，长度 2-32")
+    if not name or len(name) > 64:
+        raise ValueError("类目名称不能为空且最多 64 个字符")
+    if not re.fullmatch(r"#[0-9a-f]{6}", color):
+        raise ValueError("颜色必须是 #RRGGBB 格式")
+    from storage.mysql_store import _connect
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_keyword_tables(cur)
+            cur.execute(
+                """INSERT INTO mom_index_sectors (code, name, color, enabled, sort_order)
+                   VALUES (%s, %s, %s, %s, (SELECT next_order FROM
+                     (SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM mom_index_sectors) x))
+                   ON DUPLICATE KEY UPDATE name=VALUES(name), color=VALUES(color), enabled=VALUES(enabled)""",
+                (code, name, color, int(enabled)),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_sector_records(enabled_only: bool = False) -> List[Dict]:
+    from storage.mysql_store import _connect
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_keyword_tables(cur)
+            where = "WHERE enabled=1" if enabled_only else ""
+            cur.execute(
+                f"""SELECT code, name, color, enabled, sort_order, updated_at
+                    FROM mom_index_sectors {where} ORDER BY sort_order, id"""
+            )
+            rows = cur.fetchall()
+        conn.commit()
         return [
             {**row, "enabled": bool(row["enabled"]),
              "updated_at": row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else ""}

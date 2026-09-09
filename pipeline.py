@@ -20,13 +20,14 @@ from storage.mysql_store import (
     mysql_enabled, persist_pipeline_run, fetch_keyword_history, fetch_model_comparison,
     fetch_latest_collection_today, persist_standalone_analysis,
 )
-from keyword_config import get_keywords
+from keyword_config import get_keywords, get_sector_catalog
 from runtime_config import ini_get, ini_get_bool, ini_get_int
 from post_time import normalize_social_datetime, beijing_now
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 SECTOR_HINTS = get_keywords()
+SECTOR_NAMES.update({item["code"]: item["name"] for item in get_sector_catalog()})
 
 
 def _assert_collection_role() -> None:

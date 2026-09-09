@@ -1,10 +1,14 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>关键词管理</title><style>
-body{background:#0f172a;color:#e2e8f0;font-family:sans-serif;margin:24px}main{max-width:1100px;margin:auto}a{color:#38bdf8}.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.toolbar input,.toolbar select{min-width:150px}input,select,button{background:#1e293b;color:inherit;border:1px solid #475569;border-radius:8px;padding:10px}button{cursor:pointer}button:disabled{cursor:wait;opacity:.55}table{width:100%;border-collapse:collapse;background:#1e293b;margin-top:16px}td,th{padding:10px;border-bottom:1px solid #334155;text-align:left}.off{opacity:.45}p{color:#94a3b8}#status{min-height:24px;padding:10px 12px;border-radius:8px}#status:empty{padding:0}.error{color:#fecaca;background:#7f1d1d}.success{color:#bbf7d0;background:#14532d}.notice{color:#fde68a;background:#713f12}
+body{background:#0f172a;color:#e2e8f0;font-family:sans-serif;margin:24px}main{max-width:1100px;margin:auto}a{color:#38bdf8}.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.toolbar input,.toolbar select{min-width:150px}input,select,button{background:#1e293b;color:inherit;border:1px solid #475569;border-radius:8px;padding:10px}input[type=color]{min-width:52px;width:52px;padding:4px}button{cursor:pointer}button:disabled{cursor:wait;opacity:.55}table{width:100%;border-collapse:collapse;background:#1e293b;margin-top:16px}td,th{padding:10px;border-bottom:1px solid #334155;text-align:left}.off{opacity:.45}p{color:#94a3b8}section{margin-top:28px;padding-top:8px;border-top:1px solid #334155}#status{min-height:24px;padding:10px 12px;border-radius:8px}#status:empty{padding:0}.error{color:#fecaca;background:#7f1d1d}.success{color:#bbf7d0;background:#14532d}.notice{color:#fde68a;background:#713f12}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px}
 </style><main><a href="dashboard.html">返回看板</a><h1>监控关键词</h1><p>关键词保存在 Mac mini MySQL。修改会记录审计日志，下次采集生效。</p>
-<div class="toolbar"><select id="sector"><option>nasdaq</option><option>gold</option><option>cpo</option><option>semiconductor</option><option>storage</option></select><input id="keyword" placeholder="新增关键词"><input id="token" type="password" autocomplete="current-password" placeholder="管理 token（必填）"><button id="add">新增并启用</button></div><p id="status"></p>
-<table><thead><tr><th>板块</th><th>关键词</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table></main><script>
-const statusEl=document.getElementById('status'),rows=document.getElementById('rows'),tokenEl=document.getElementById('token');
+<div class="toolbar"><input id="token" type="password" autocomplete="current-password" placeholder="管理 token（必填）"></div><p id="status"></p>
+<section><h2>主要类目</h2><p>编码用于数据库和程序识别，创建后请不要修改。停用后下次不再采集，历史数据不受影响。</p>
+<div class="toolbar"><input id="sector-code" placeholder="类目编码，如 robotics"><input id="sector-name" placeholder="显示名称，如 机器人"><input id="sector-color" type="color" value="#94a3b8"><button id="add-sector">新增并启用类目</button></div>
+<table><thead><tr><th>类目</th><th>编码</th><th>颜色</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="sector-rows"></tbody></table></section>
+<section><h2>搜索关键词</h2><div class="toolbar"><select id="sector"></select><input id="keyword" placeholder="新增关键词"><button id="add">新增并启用关键词</button></div>
+<table><thead><tr><th>类目</th><th>关键词</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table></section></main><script>
+const statusEl=document.getElementById('status'),rows=document.getElementById('rows'),sectorRows=document.getElementById('sector-rows'),tokenEl=document.getElementById('token');
 let adminState={enabled:false,token_required:true};
 tokenEl.value=sessionStorage.getItem('keywordAdminToken')||'';
 tokenEl.addEventListener('input',()=>sessionStorage.setItem('keywordAdminToken',tokenEl.value));
@@ -21,11 +25,25 @@ async function save(sector,keyword,enabled,button){
     await load(false);showStatus(`已${enabled?'启用':'停用'}：${sector} / ${keyword}`,'success');
   }finally{if(button?.isConnected){button.disabled=false;button.textContent=oldText}}
 }
+async function saveSector(code,name,color,enabled,button){
+  if(!adminState.enabled)throw Error('关键词管理未启用，请先修改 config.ini 并重启 Web 服务');
+  if(adminState.token_required&&!tokenEl.value.trim())throw Error('请先填写管理 token');
+  const oldText=button?.textContent;if(button){button.disabled=true;button.textContent='处理中…'}
+  try{
+    const r=await fetch('/api/sectors',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':tokenEl.value.trim()},body:JSON.stringify({code,name,color,enabled})});
+    const d=await readJson(r);if(!r.ok)throw Error(d.error||`请求失败 (${r.status})`);
+    await load(false);showStatus(`已${enabled?'启用':'停用'}类目：${name} (${code})`,'success');
+  }finally{if(button?.isConnected){button.disabled=false;button.textContent=oldText}}
+}
 async function load(showReady=true){
-  const [stateResponse,listResponse]=await Promise.all([fetch('/api/keyword-admin/status',{cache:'no-store'}),fetch('/api/keywords',{cache:'no-store'})]);
-  adminState=await readJson(stateResponse);const d=await readJson(listResponse);if(!listResponse.ok)throw Error(d.error||listResponse.status);
-  rows.replaceChildren(...(d.items||[]).map(item=>{const tr=document.createElement('tr');if(!item.enabled)tr.className='off';[item.sector,item.keyword,item.enabled?'启用':'停用',item.updated_at].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.append(td)});const td=document.createElement('td'),button=document.createElement('button');button.textContent=item.enabled?'停用':'启用';button.onclick=()=>save(item.sector,item.keyword,!item.enabled,button).catch(e=>showStatus(e.message,'error'));td.append(button);tr.append(td);return tr}));
+  const [stateResponse,listResponse,sectorResponse]=await Promise.all([fetch('/api/keyword-admin/status',{cache:'no-store'}),fetch('/api/keywords',{cache:'no-store'}),fetch('/api/sectors',{cache:'no-store'})]);
+  adminState=await readJson(stateResponse);const d=await readJson(listResponse),sectorData=await readJson(sectorResponse);if(!listResponse.ok)throw Error(d.error||listResponse.status);if(!sectorResponse.ok)throw Error(sectorData.error||sectorResponse.status);
+  const sectors=sectorData.items||[],sectorMap=Object.fromEntries(sectors.map(x=>[x.code,x]));
+  document.getElementById('sector').replaceChildren(...sectors.filter(x=>x.enabled).map(x=>new Option(`${x.name} (${x.code})`,x.code)));
+  sectorRows.replaceChildren(...sectors.map(item=>{const tr=document.createElement('tr');if(!item.enabled)tr.className='off';const values=[item.name,item.code,item.color,item.enabled?'启用':'停用',item.updated_at];values.forEach((v,i)=>{const td=document.createElement('td');if(i===2)td.innerHTML=`<span class="dot" style="background:${item.color}"></span>${item.color}`;else td.textContent=v;tr.append(td)});const td=document.createElement('td'),button=document.createElement('button');button.textContent=item.enabled?'停用':'启用';button.onclick=()=>saveSector(item.code,item.name,item.color,!item.enabled,button).catch(e=>showStatus(e.message,'error'));td.append(button);tr.append(td);return tr}));
+  rows.replaceChildren(...(d.items||[]).map(item=>{const tr=document.createElement('tr');if(!item.enabled||!sectorMap[item.sector]?.enabled)tr.className='off';[sectorMap[item.sector]?.name||item.sector,item.keyword,item.enabled?'启用':'停用',item.updated_at].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.append(td)});const td=document.createElement('td'),button=document.createElement('button');button.textContent=item.enabled?'停用':'启用';button.disabled=!sectorMap[item.sector]?.enabled;button.onclick=()=>save(item.sector,item.keyword,!item.enabled,button).catch(e=>showStatus(e.message,'error'));td.append(button);tr.append(td);return tr}));
   if(showReady){if(!adminState.enabled)showStatus('当前为只读：请在 config.ini 的 [keyword_admin] 中启用管理功能并重启 Web 服务','notice');else if(adminState.token_required&&!tokenEl.value)showStatus('管理功能已启用，修改前请填写管理 token','notice');else showStatus('管理功能可用','success')}
 }
 const addButton=document.getElementById('add');addButton.onclick=()=>save(document.getElementById('sector').value,document.getElementById('keyword').value,true,addButton).catch(e=>showStatus(e.message,'error'));load().catch(e=>showStatus(e.message,'error'));
+const addSectorButton=document.getElementById('add-sector');addSectorButton.onclick=()=>saveSector(document.getElementById('sector-code').value,document.getElementById('sector-name').value,document.getElementById('sector-color').value,true,addSectorButton).catch(e=>showStatus(e.message,'error'));
 </script></html>

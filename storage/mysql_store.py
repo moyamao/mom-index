@@ -983,6 +983,11 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
 MODEL_SECTOR_ORDER = ("nasdaq", "gold", "cpo", "semiconductor", "storage")
 
 
+def _ordered_sectors(values) -> List[str]:
+    available = set(values)
+    return [item for item in MODEL_SECTOR_ORDER if item in available] + sorted(available - set(MODEL_SECTOR_ORDER))
+
+
 def _analysis_key(row: Dict):
     """Build a stable cross-batch identity for one collected post."""
     sector = str(row.get("sector") or "").strip()
@@ -1161,7 +1166,7 @@ def fetch_model_comparison() -> Dict:
                     "comparison_date": target_day.isoformat(),
                     "sectors": {},
                 })
-                for sector in MODEL_SECTOR_ORDER:
+                for sector in _ordered_sectors(by_sector):
                     if not by_sector.get(sector):
                         continue
                     sector_result = compute_sector_index(by_sector[sector])
@@ -1330,7 +1335,7 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
             snapshots = []
             for day_key, sectors in sorted(dates.items()):
                 sector_results = {}
-                for sector in MODEL_SECTOR_ORDER:
+                for sector in _ordered_sectors(sectors):
                     items = sectors.get(sector)
                     if not items:
                         continue

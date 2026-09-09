@@ -382,6 +382,10 @@ const INTENT_NAMES = {
 let allItems = [];
 let modelProfiles = [];
 
+function applySectorCatalog(items) {
+  (items || []).forEach(item => { SECTOR_NAMES[item.code] = item.name || item.code; });
+}
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -596,6 +600,7 @@ fetch('/api/post-model-comparison', {cache: 'no-store'})
   .then(resp => resp.json())
   .then(data => {
     if (data.error) throw new Error(data.error);
+    applySectorCatalog(data.sector_catalog);
     allItems = data.items || [];
     modelProfiles = data.profiles || [];
     renderSummary(allItems);
@@ -609,7 +614,7 @@ fetch('/api/post-model-comparison', {cache: 'no-store'})
     buildSelectOptions(el('platform-filter'), Object.keys(platformCounts).map(
       key => key
     ).sort((a, b) => (platformCounts[b] || 0) - (platformCounts[a] || 0)), '全部平台');
-    buildSelectOptions(el('sector-filter'), Object.keys(SECTOR_NAMES), '全部板块');
+    buildSelectOptions(el('sector-filter'), [...new Set(allItems.map(item => item.sector))], '全部板块');
     el('level-filter').innerHTML = '<option value="all">全部类型</option><option value="opinion">个人观点</option><option value="news">资讯</option><option value="spam">无效</option>';
     el('intent-filter').innerHTML = Object.entries(INTENT_NAMES).map(
       ([value, label]) => `<option value="${value}">${label}</option>`

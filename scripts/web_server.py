@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
-from keyword_config import list_keyword_records, set_keyword
+from keyword_config import list_keyword_records, list_sector_records, set_keyword, set_sector
 from runtime_config import ini_get, ini_get_bool, ini_get_int
 
 
@@ -39,6 +39,7 @@ def _dashboard_payload():
     dashboard["model_daily_snapshots"] = fetch_model_daily_snapshots()
     dashboard["platform_sentiment_trends"] = fetch_platform_trends()
     dashboard["model_sector_history"] = fetch_model_sector_history()
+    dashboard["sector_catalog"] = list_sector_records(enabled_only=True)
     return dashboard
 
 
@@ -80,7 +81,9 @@ class Handler(SimpleHTTPRequestHandler):
                 query = parse_qs(urlsplit(self.path).query)
                 requested_date = query.get("date", [""])[0]
                 target_date = date.fromisoformat(requested_date) if requested_date else None
-                self._json(200, fetch_post_model_comparison(target_date))
+                payload = fetch_post_model_comparison(target_date)
+                payload["sector_catalog"] = list_sector_records(enabled_only=True)
+                self._json(200, payload)
             except Exception as exc:
                 self._json(500, {"error": f"读取帖子模型判定失败: {exc}"})
             return
@@ -90,10 +93,17 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return
+        if path == "/api/sectors":
+            try:
+                self._json(200, {"items": list_sector_records()})
+            except Exception as exc:
+                self._json(500, {"error": str(exc)})
+            return
         super().do_GET()
 
     def do_POST(self):
-        if urlsplit(self.path).path != "/api/keywords":
+        path = urlsplit(self.path).path
+        if path not in {"/api/keywords", "/api/sectors"}:
             self._json(404, {"error": "接口不存在"})
             return
         if not ini_get_bool("keyword_admin", "enabled", False):
@@ -107,12 +117,22 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = min(int(self.headers.get("Content-Length", "0")), 4096)
             payload = json.loads(self.rfile.read(length))
-            sector, keyword, enabled = _parse_keyword_update(payload)
-            set_keyword(sector, keyword, enabled, "web")
-            self._json(200, {
-                "ok": True,
-                "item": {"sector": sector, "keyword": keyword, "enabled": enabled},
-            })
+            if path == "/api/sectors":
+                code = str(payload.get("code", "")).strip()
+                name = str(payload.get("name", "")).strip()
+                color = str(payload.get("color", "#94a3b8")).strip()
+                enabled = payload.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled 必须是布尔值")
+                set_sector(code, name, color, enabled)
+                self._json(200, {"ok": True, "item": {"code": code, "name": name, "color": color, "enabled": enabled}})
+            else:
+                sector, keyword, enabled = _parse_keyword_update(payload)
+                set_keyword(sector, keyword, enabled, "web")
+                self._json(200, {
+                    "ok": True,
+                    "item": {"sector": sector, "keyword": keyword, "enabled": enabled},
+                })
         except (ValueError, json.JSONDecodeError) as exc:
             self._json(400, {"error": str(exc)})
         except Exception as exc:
