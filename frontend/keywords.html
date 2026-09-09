@@ -36,7 +36,7 @@ async function saveSector(code,name,color,enabled,button){
   }finally{if(button?.isConnected){button.disabled=false;button.textContent=oldText}}
 }
 async function load(showReady=true){
-  const [stateResponse,listResponse,sectorResponse]=await Promise.all([fetch('/api/keyword-admin/status',{cache:'no-store'}),fetch('/api/keywords',{cache:'no-store'}),fetch('/api/sectors',{cache:'no-store'})]);
+  const stateResponse=await fetch('/api/keyword-admin/status',{cache:'no-store'}),sectorResponse=await fetch('/api/sectors',{cache:'no-store'}),listResponse=await fetch('/api/keywords',{cache:'no-store'});
   adminState=await readJson(stateResponse);const d=await readJson(listResponse),sectorData=await readJson(sectorResponse);if(!listResponse.ok)throw Error(d.error||listResponse.status);if(!sectorResponse.ok)throw Error(sectorData.error||sectorResponse.status);
   const sectors=sectorData.items||[],sectorMap=Object.fromEntries(sectors.map(x=>[x.code,x]));
   document.getElementById('sector').replaceChildren(...sectors.filter(x=>x.enabled).map(x=>new Option(`${x.name} (${x.code})`,x.code)));

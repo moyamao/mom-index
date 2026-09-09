@@ -75,12 +75,6 @@ def _ensure_keyword_tables(cur) -> None:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
     )
-    for order, (code, item) in enumerate(DEFAULT_SECTORS.items()):
-        cur.execute(
-            """INSERT IGNORE INTO mom_index_sectors
-               (code, name, color, enabled, sort_order) VALUES (%s, %s, %s, 1, %s)""",
-            (code, item["name"], item["color"], order),
-        )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS mom_index_keywords (
@@ -96,6 +90,16 @@ def _ensure_keyword_tables(cur) -> None:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
     )
+
+
+def _seed_default_sectors(cur) -> None:
+    """Seed built-ins from one transaction, never from concurrent read endpoints."""
+    for order, (code, item) in enumerate(DEFAULT_SECTORS.items()):
+        cur.execute(
+            """INSERT IGNORE INTO mom_index_sectors
+               (code, name, color, enabled, sort_order) VALUES (%s, %s, %s, 1, %s)""",
+            (code, item["name"], item["color"], order),
+        )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS mom_index_keyword_changes (
@@ -149,6 +153,7 @@ def sync_config_keywords_to_mysql(changed_by: str = "bootstrap") -> int:
     try:
         with conn.cursor() as cur:
             _ensure_keyword_tables(cur)
+            _seed_default_sectors(cur)
             for sector, keywords in configured.items():
                 for order, keyword in enumerate(keywords):
                     cur.execute(
@@ -270,6 +275,7 @@ def list_sector_records(enabled_only: bool = False) -> List[Dict]:
     try:
         with conn.cursor() as cur:
             _ensure_keyword_tables(cur)
+            _seed_default_sectors(cur)
             where = "WHERE enabled=1" if enabled_only else ""
             cur.execute(
                 f"""SELECT code, name, color, enabled, sort_order, updated_at
