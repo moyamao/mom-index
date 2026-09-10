@@ -23,6 +23,7 @@ from storage.mysql_store import (
 from keyword_config import get_keywords, get_sector_catalog
 from runtime_config import ini_get, ini_get_bool, ini_get_int
 from post_time import normalize_social_datetime, beijing_now
+from local_llm_runtime import local_llm_for_analysis
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
@@ -435,7 +436,8 @@ def run_pipeline():
     
     # ===== 第2步: LLM分析 =====
     print("🧠 第2步: LLM 多维度分析")
-    analysis_results = analyze_all(all_posts)
+    with local_llm_for_analysis():
+        analysis_results = analyze_all(all_posts)
     
     for sector, results in analysis_results.items():
         news_count = sum(getattr(r, "content_type", "opinion") == "news" or r.level == "资讯帖" for r in results)

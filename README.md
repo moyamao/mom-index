@@ -96,6 +96,7 @@ python3 scripts/web_server.py
 - 每条分析结果保存模型 profile、完整模型名、提示词版本、分析引擎、批次和正文哈希。14B 与 27B 不互相覆盖。
 - 指标按帖子北京时间发布时间归属；模型分析时间仅用于审计。模型对比只展示各自批次和覆盖率，不把未分析当成零。
 - `scripts/web_server.py` 会在页面请求时从共享 MySQL 合并最新模型批次；MacBook 完成 27B 分析后无需复制前端 JSON，刷新 Mac mini 页面即可看到模型对比和平台趋势。
+- Mac mini 可启用 `[local_llm]` 按需模式：数据采集期间不加载 14B，进入 LLM 分析前自动启动 `llama-server`，分析完成、失败或中断时关闭本次启动的服务。
 
 Mac mini 首次将配置关键词导入 MySQL：
 
