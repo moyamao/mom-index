@@ -85,6 +85,10 @@ python3 scripts/web_server.py
 # Mac mini 后台重启并检查 Web 服务
 ./scripts/restart_web.sh
 
+# Mac mini 推荐安装为登录守护服务，重启或异常退出后自动恢复
+chmod +x scripts/install_web_launchd.sh
+./scripts/install_web_launchd.sh
+
 # 浏览器打开
 # http://localhost:8081/dashboard.html
 ```
