@@ -168,6 +168,8 @@ cp conf/config.example.ini conf/config.ini
 
 默认每天北京时间 `00:00` 跑一次 `pipeline.py`，采集前一自然日的社媒数据并完成 14B 分析，日志写到 `logs/`。当天早间邮件直接读取这次已完成的结果，不再临时重复抓取。
 
+MacBook 可安装 `scripts/install_27b_launchd.sh`，每天 `02:30` 启动27B，只补最近14天内当前模型和提示词版本尚未成功分析的帖子，单次上限5000条。
+
 安装：
 
 ```bash

@@ -591,14 +591,39 @@ def backfill_post_catalog(batch_size: int = 1000) -> Dict[str, int]:
         conn.close()
 
 
-def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List[Dict]]:
-    """Load one newest copy of each source post; never starts a collector."""
+def fetch_posts_for_analysis(
+    days: int = 7,
+    limit: int = 1000,
+    analysis_profile: str = "",
+    prompt_version: str = "",
+) -> Dict[str, List[Dict]]:
+    """Load newest source posts, optionally excluding successful profile analyses."""
     conn = _connect()
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            cur.execute(
+            missing_clause = ""
+            params: List[object] = [max(1, days)]
+            if analysis_profile and prompt_version:
+                missing_clause = """
+                AND NOT EXISTS (
+                    SELECT 1 FROM mom_index_analysis a
+                    WHERE a.analysis_profile = %s
+                      AND a.prompt_version = %s
+                      AND a.analysis_engine = 'llm'
+                      AND a.sector = s.sector
+                      AND a.platform = c.platform
+                      AND (
+                          (COALESCE(c.post_id, '') <> '' AND a.post_id = c.post_id)
+                          OR (COALESCE(c.post_id, '') = '' AND a.content_hash =
+                              SHA2(CONCAT(COALESCE(c.title, ''), '\n', COALESCE(c.content, '')), 256))
+                      )
+                )
                 """
+                params.extend([analysis_profile, prompt_version])
+            params.append(max(1, limit))
+            cur.execute(
+                f"""
                 SELECT s.run_id, s.sector, c.platform, c.post_id AS id,
                        c.title, c.content, c.canonical_url AS url, c.author,
                        c.post_datetime AS published_at, s.collected_at, c.raw_json
@@ -610,10 +635,11 @@ def fetch_posts_for_analysis(days: int = 7, limit: int = 1000) -> Dict[str, List
                 ) latest ON latest.content_key = c.content_key
                 INNER JOIN mom_index_post_sightings s ON s.id = latest.newest_id
                 WHERE c.post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                {missing_clause}
                 ORDER BY c.post_datetime DESC
                 LIMIT %s
                 """,
-                (max(1, days), max(1, limit)),
+                tuple(params),
             )
             rows = cur.fetchall()
         result: Dict[str, List[Dict]] = defaultdict(list)

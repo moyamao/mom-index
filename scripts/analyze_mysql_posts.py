@@ -13,6 +13,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="只分析 MySQL 已采集帖子，不执行任何抓取")
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--limit", type=int, default=1000)
+    parser.add_argument("--reanalyze-all", action="store_true", help="重新分析窗口内全部帖子")
     args = parser.parse_args()
 
     os.environ.setdefault("MOM_INDEX_RUNTIME_ROLE", "analyst")
@@ -21,17 +22,25 @@ def main() -> None:
     os.environ.setdefault("MOM_INDEX_LLM_MAX_POSTS_PER_RUN", str(max(1, args.limit)))
 
     from analyzer.llm_analyzer import analyze_all
-    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_ready
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version, llm_ready
     from analyzer.platform_trends import fetch_platform_trends
     from storage.mysql_store import fetch_model_comparison, fetch_posts_for_analysis, persist_standalone_analysis
 
     if not llm_ready():
         raise SystemExit("27B LLM 未就绪，请检查 config.ini 或 MOM_INDEX_LLM_* / QWEN_BASE_URL")
-    posts = fetch_posts_for_analysis(args.days, args.limit)
+    profile = llm_profile()
+    posts = fetch_posts_for_analysis(
+        args.days,
+        args.limit,
+        analysis_profile="" if args.reanalyze_all else profile,
+        prompt_version="" if args.reanalyze_all else llm_prompt_version(),
+    )
     total = sum(len(items) for items in posts.values())
-    print(f"读取最近 {args.days} 天去重帖子 {total} 条；profile={llm_profile()} model={llm_model_name()}")
+    mode = "全部重算" if args.reanalyze_all else "仅补未分析"
+    print(f"读取最近 {args.days} 天去重帖子 {total} 条；{mode}；profile={profile} model={llm_model_name()}")
     if not total:
-        raise SystemExit("MySQL 中没有符合条件的帖子")
+        print("没有待补的帖子，本次任务正常结束。")
+        return
     results = analyze_all(posts)
     batch_id = persist_standalone_analysis(results, posts, note=f"MacBook on-demand {args.days}d")
     print(f"27B 分析完成并单独入库: batch_id={batch_id}")
