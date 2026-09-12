@@ -166,7 +166,7 @@ cp conf/config.example.ini conf/config.ini
 - `deploy/com.mhy.mom_index.plist`
 - `scripts/install_launchd.sh`
 
-默认每天北京时间 `23:00` 跑一次 `pipeline.py`，覆盖当天绝大部分社媒数据并完成 14B 分析，日志写到 `logs/`。次日早间邮件直接读取这次已完成的结果，不再临时重复抓取。
+默认每天北京时间 `00:00` 跑一次 `pipeline.py`，采集前一自然日的社媒数据并完成 14B 分析，日志写到 `logs/`。当天早间邮件直接读取这次已完成的结果，不再临时重复抓取。
 
 安装：
 

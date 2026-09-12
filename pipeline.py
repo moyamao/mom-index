@@ -329,12 +329,22 @@ def _deconflict_cross_sector_posts(all_posts: dict) -> dict:
 
 
 def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
-    """优先使用今日样本；数量不足时自动扩大到最近若干天。"""
+    """优先使用目标自然日样本；数量不足时自动扩大到最近若干天。"""
     max_age_days = max(1, ini_get_int("recency", "max_age_days", 7))
     daily_min_posts = max(1, ini_get_int("recency", "daily_min_posts", 20))
     now = beijing_now()
     cutoff = now - timedelta(days=max_age_days)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if now.hour < 6:
+        day_start = today_start - timedelta(days=1)
+        day_end = today_start
+        day_label = "昨日"
+        in_target_day = lambda published: day_start <= published < day_end
+    else:
+        day_start = today_start
+        day_end = now
+        day_label = "今日"
+        in_target_day = lambda published: day_start <= published <= day_end
     filtered_posts = {}
     windows = {}
 
@@ -373,11 +383,14 @@ def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
             detail = ", ".join(f"{name}={count}" for name, count in sorted(unknown_by_platform.items()))
             print(f"  [时效-{sector}] {unknown_time} 条未识别发布时间，排除当期分析 ({detail})")
         kept.sort(key=lambda post: post["published_at"], reverse=True)
-        daily_posts = [post for post in kept if datetime.fromisoformat(post["published_at"]) >= today_start]
+        daily_posts = [
+            post for post in kept
+            if in_target_day(datetime.fromisoformat(post["published_at"]))
+        ]
         use_daily = len(daily_posts) >= daily_min_posts
         selected = daily_posts if use_daily else kept
         mode = "day" if use_daily else "week"
-        label = "今日" if use_daily else f"近{max_age_days}天"
+        label = day_label if use_daily else f"近{max_age_days}天"
         filtered_posts[sector] = selected
         windows[sector] = {
             "mode": mode,
@@ -388,7 +401,10 @@ def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
             "start_at": selected[-1]["published_at"] if selected else "",
             "end_at": selected[0]["published_at"] if selected else "",
         }
-        print(f"  [窗口-{sector}] {label}: {len(selected)} 条 (今日 {len(daily_posts)} 条，日阈值 {daily_min_posts})")
+        print(
+            f"  [窗口-{sector}] {label}: {len(selected)} 条 "
+            f"({day_label} {len(daily_posts)} 条，日阈值 {daily_min_posts})"
+        )
     return filtered_posts, windows
 
 
