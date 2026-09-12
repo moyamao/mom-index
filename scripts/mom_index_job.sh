@@ -12,6 +12,17 @@ LOG_FILE="logs/mom_index_job_${TIMESTAMP}.log"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] mom-index job start"
   echo "root_dir=$ROOT_DIR"
 
+  JITTER_MAX_SECONDS="${MOM_INDEX_START_JITTER_SECONDS:-0}"
+  if [[ "$JITTER_MAX_SECONDS" != <-> ]]; then
+    echo "无效的 MOM_INDEX_START_JITTER_SECONDS=$JITTER_MAX_SECONDS" >&2
+    exit 2
+  fi
+  if (( JITTER_MAX_SECONDS > 0 )); then
+    delay=$(( RANDOM % (JITTER_MAX_SECONDS + 1) ))
+    echo "随机延迟 ${delay} 秒后开始采集"
+    sleep "$delay"
+  fi
+
   if [[ -f ".venv/bin/activate" ]]; then
     source .venv/bin/activate
     PYTHON_BIN="python"

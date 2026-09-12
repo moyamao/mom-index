@@ -166,9 +166,11 @@ cp conf/config.example.ini conf/config.ini
 - `deploy/com.mhy.mom_index.plist`
 - `scripts/install_launchd.sh`
 
-默认每天北京时间 `00:00` 跑一次 `pipeline.py`，采集前一自然日的社媒数据并完成 14B 分析，日志写到 `logs/`。当天早间邮件直接读取这次已完成的结果，不再临时重复抓取。
+默认每天北京时间 `23:00` 由 launchd 唤起，并随机延迟 `0–1800` 秒，因此实际在 `23:00–23:30` 之间运行 `pipeline.py`，采集当日截至启动时点的社媒数据并完成14B分析。次日早间邮件直接读取这次已完成的结果，不再临时重复抓取。手动运行 `scripts/mom_index_job.sh` 默认不延迟。
 
-MacBook 可安装 `scripts/install_27b_launchd.sh`，每天 `02:30` 启动27B，只补最近14天内当前模型和提示词版本尚未成功分析的帖子，单次上限5000条。
+MacBook 可安装 `scripts/install_27b_launchd.sh`，每天 `02:30` 启动27B，只补最近14天内 `macbook-27b` 尚未成功分析的原帖，单次上限5000条。同一帖子命中多个关键词或板块时只分析一次；提示词升级不会自动重算，需显式使用 `--reanalyze-all`。
+
+Mac mini 的14B采用相同的严格去重口径：同一来源帖子每个模型最多成功分析一次。只有LLM失败或降级为规则判定的帖子会在后续任务中继续重试。
 
 安装：
 

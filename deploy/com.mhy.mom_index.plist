@@ -22,7 +22,7 @@
   <array>
     <dict>
       <key>Hour</key>
-      <integer>0</integer>
+      <integer>23</integer>
       <key>Minute</key>
       <integer>0</integer>
     </dict>
@@ -40,6 +40,8 @@
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
+    <key>MOM_INDEX_START_JITTER_SECONDS</key>
+    <string>1800</string>
   </dict>
 </dict>
 </plist>
