@@ -31,6 +31,8 @@ LOG_FILE="logs/mom_index_job_${TIMESTAMP}.log"
   fi
 
   export PYTHONDONTWRITEBYTECODE=1
+  # 23 点正式批次必须采集当天完整数据，不能复用跨午夜才入库的上一批次。
+  export MOM_INDEX_FORCE_COLLECTION=1
 
   # 管道交给 tee 后，显式关闭 Python 输出缓冲，终端可实时看到采集进度。
   "$PYTHON_BIN" -u pipeline.py

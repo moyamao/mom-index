@@ -658,6 +658,10 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
             time.sleep(interval)
 
     print(f"  [LLM二判] 候选 {len(candidates)} 条，执行 {len(selected)} 条，成功 {success} 条，失败 {failed} 条")
+    if failed:
+        failed_results = [result for _, _, _, result in selected if result.llm_error]
+        for result in failed_results[:3]:
+            print(f"    ⚠️ {result.sector}/{result.post_id}: {result.llm_error}")
     for results in all_results.values():
         results.sort(key=lambda r: r.newbie_score, reverse=True)
     return all_results
