@@ -24,8 +24,13 @@ def _compute_llm_profile(posts: List) -> Dict:
     ]
     sentiment = {name: sum(getattr(r, "sentiment_label", "neutral") == name for r in llm_posts)
                  for name in ("fear", "greed", "neutral", "mixed")}
+    emotion_tags = {name: sum(name in (getattr(r, "emotion_tags", []) or []) for r in llm_posts)
+                    for name in ("anxiety", "anger", "excitement", "optimism", "pessimism",
+                                 "disappointment", "regret", "sarcasm", "calm")}
     position = {name: sum(getattr(r, "position_status", "unknown") == name for r in llm_posts)
                 for name in ("none", "holding", "trapped", "exited", "unknown")}
+    intent = {name: sum(getattr(r, "intent", "neutral") == name for r in llm_posts)
+              for name in ("buy", "add", "hold", "reduce", "sell", "clear", "neutral")}
     outlook = {name: sum(getattr(r, "market_outlook", "unknown") == name for r in llm_posts)
                for name in ("bullish", "bearish", "sideways", "unknown")}
     weight = sum(max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1) for r in llm_posts)
@@ -38,7 +43,8 @@ def _compute_llm_profile(posts: List) -> Dict:
     ratio = lambda count, total: round(count / max(total, 1) * 100, 1)
     return {
         "analyzed_posts": len(llm_posts), "coverage_ratio": ratio(len(llm_posts), len(posts)),
-        "sentiment": sentiment, "position": position, "outlook": outlook,
+        "sentiment": sentiment, "emotion_tags": emotion_tags,
+        "position": position, "intent": intent, "outlook": outlook,
         "market_sentiment_index": sentiment_index,
         "outlook_index": round((outlook["bullish"] - outlook["bearish"]) / max(known_outlooks, 1) * 100, 1),
         "known_position_posts": known_positions, "known_outlook_posts": known_outlooks,

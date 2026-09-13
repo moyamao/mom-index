@@ -15,7 +15,8 @@ class MarketSentimentTest(unittest.TestCase):
             "opinion-1", "我担心继续下跌", "xiaohongshu", "storage",
             content_type="opinion", sentiment_source="llm",
             sentiment_score=-0.8, sentiment_label="fear", sentiment_confidence=0.9,
-            position_status="trapped", market_outlook="bearish",
+            position_status="trapped", market_outlook="bearish", intent="add",
+            emotion_tags=["anxiety", "anger"],
         )
 
         result = compute_sector_index([news, opinion])
@@ -25,6 +26,13 @@ class MarketSentimentTest(unittest.TestCase):
         self.assertEqual(result["details"]["opinion_posts"], 1)
         self.assertEqual(result["details"]["llm_profile"]["analyzed_posts"], 1)
         self.assertEqual(result["details"]["llm_profile"]["trapped_ratio"], 100.0)
+        self.assertEqual(result["details"]["llm_profile"]["sentiment"]["fear"], 1)
+        self.assertEqual(result["details"]["llm_profile"]["position"]["trapped"], 1)
+        self.assertEqual(result["details"]["llm_profile"]["intent"]["add"], 1)
+        self.assertEqual(result["details"]["llm_profile"]["intent"]["buy"], 0)
+        self.assertEqual(result["details"]["llm_profile"]["emotion_tags"]["anxiety"], 1)
+        self.assertEqual(result["details"]["llm_profile"]["emotion_tags"]["anger"], 1)
+        self.assertEqual(result["details"]["llm_profile"]["emotion_tags"]["calm"], 0)
 
     def test_news_only_has_no_sentiment_data(self):
         news = AnalysisResult(

@@ -222,6 +222,7 @@ def _ensure_tables(cur) -> None:
             level VARCHAR(32) DEFAULT '',
             sentiment_score DECIMAL(6,2) NOT NULL DEFAULT 0,
             sentiment_label VARCHAR(16) NOT NULL DEFAULT 'neutral',
+            emotion_tags_json TEXT,
             sentiment_confidence DECIMAL(6,4) NOT NULL DEFAULT 0,
             intent VARCHAR(16) DEFAULT '',
             intent_strength DECIMAL(6,2) NOT NULL DEFAULT 0,
@@ -255,6 +256,7 @@ def _ensure_tables(cur) -> None:
         "position_status": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
         "market_outlook": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
         "sentiment_label": "VARCHAR(16) NOT NULL DEFAULT 'neutral'",
+        "emotion_tags_json": "TEXT",
         "sentiment_confidence": "DECIMAL(6,4) NOT NULL DEFAULT 0",
         "content_type": "VARCHAR(16) NOT NULL DEFAULT 'opinion'",
     }
@@ -433,6 +435,7 @@ def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_post
                 item.level,
                 float(item.sentiment_score),
                 getattr(item, "sentiment_label", "neutral") or "neutral",
+                json.dumps(getattr(item, "emotion_tags", []) or [], ensure_ascii=False),
                 float(getattr(item, "sentiment_confidence", 0) or 0),
                 item.intent,
                 float(item.intent_strength),
@@ -506,12 +509,12 @@ def persist_pipeline_run(
                     """
                     INSERT INTO mom_index_analysis (
                         run_id, sector, post_id, title, platform, newbie_score, newbie_confidence,
-                        level, sentiment_score, sentiment_label, sentiment_confidence, intent, intent_strength,
+                        level, sentiment_score, sentiment_label, emotion_tags_json, sentiment_confidence, intent, intent_strength,
                         position_status, market_outlook, content_type, key_signals_json, reasoning,
                         matched_newbie_json, matched_pro_json, batch_id, analysis_profile,
                         model_name, prompt_version, analysis_engine, content_hash
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     analysis_rows,
                 )
@@ -595,7 +598,6 @@ def fetch_posts_for_analysis(
     days: int = 7,
     limit: int = 1000,
     analysis_profile: str = "",
-    prompt_version: str = "",
 ) -> Dict[str, List[Dict]]:
     """Load newest source posts, optionally excluding successful profile analyses."""
     conn = _connect()
@@ -604,14 +606,12 @@ def fetch_posts_for_analysis(
             _ensure_tables(cur)
             missing_clause = ""
             params: List[object] = [max(1, days)]
-            if analysis_profile and prompt_version:
+            if analysis_profile:
                 missing_clause = """
                 AND NOT EXISTS (
                     SELECT 1 FROM mom_index_analysis a
                     WHERE a.analysis_profile = %s
-                      AND a.prompt_version = %s
                       AND a.analysis_engine = 'llm'
-                      AND a.sector = s.sector
                       AND a.platform = c.platform
                       AND (
                           (COALESCE(c.post_id, '') <> '' AND a.post_id = c.post_id)
@@ -620,7 +620,7 @@ def fetch_posts_for_analysis(
                       )
                 )
                 """
-                params.extend([analysis_profile, prompt_version])
+                params.append(analysis_profile)
             params.append(max(1, limit))
             cur.execute(
                 f"""
@@ -629,9 +629,9 @@ def fetch_posts_for_analysis(
                        c.post_datetime AS published_at, s.collected_at, c.raw_json
                 FROM mom_index_post_catalog c
                 INNER JOIN (
-                    SELECT content_key, sector, MAX(id) AS newest_id
+                    SELECT content_key, MAX(id) AS newest_id
                     FROM mom_index_post_sightings
-                    GROUP BY content_key, sector
+                    GROUP BY content_key
                 ) latest ON latest.content_key = c.content_key
                 INNER JOIN mom_index_post_sightings s ON s.id = latest.newest_id
                 WHERE c.post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)
@@ -657,6 +657,67 @@ def fetch_posts_for_analysis(
         return dict(result)
     finally:
         conn.close()
+
+
+def filter_posts_pending_analysis(
+    all_posts: Dict[str, List[Dict]], analysis_profile: str
+) -> tuple[Dict[str, List[Dict]], Dict[str, int]]:
+    """Keep each source post once and skip successful analyses for this profile."""
+    unique_posts: Dict[str, List[Dict]] = {sector: [] for sector in all_posts}
+    seen_content_keys = set()
+    duplicate_count = 0
+    analyzed_count = 0
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            cur.execute(
+                """SELECT platform, post_id, content_hash
+                   FROM mom_index_analysis
+                   WHERE analysis_profile=%s AND analysis_engine='llm'""",
+                (analysis_profile,),
+            )
+            analyzed_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    analyzed_ids = {
+        (_normalize_identity_text(row.get("platform")), _normalize_identity_text(row.get("post_id")))
+        for row in analyzed_rows
+        if _normalize_identity_text(row.get("post_id"))
+    }
+    analyzed_hashes = {
+        (_normalize_identity_text(row.get("platform")), str(row.get("content_hash") or ""))
+        for row in analyzed_rows
+        if str(row.get("content_hash") or "")
+    }
+
+    for sector, posts in all_posts.items():
+        for post in posts:
+            content_key = post_content_key(post)
+            if content_key in seen_content_keys:
+                duplicate_count += 1
+                continue
+            seen_content_keys.add(content_key)
+
+            platform = _normalize_identity_text(post.get("platform"))
+            post_id = _normalize_identity_text(post.get("id") or post.get("post_id"))
+            already_analyzed = (
+                (bool(post_id) and (platform, post_id) in analyzed_ids)
+                or (not post_id and (platform, _content_hash(post)) in analyzed_hashes)
+            )
+            if already_analyzed:
+                analyzed_count += 1
+                continue
+            unique_posts[sector].append(post)
+
+    return unique_posts, {
+        "input": sum(len(posts) for posts in all_posts.values()),
+        "pending": sum(len(posts) for posts in unique_posts.values()),
+        "duplicates": duplicate_count,
+        "already_analyzed": analyzed_count,
+    }
 
 
 def fetch_latest_collection_today() -> Optional[Dict]:
@@ -766,6 +827,7 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                         float(item.newbie_score), item.newbie_confidence, item.level,
                         float(item.sentiment_score),
                         getattr(item, "sentiment_label", "neutral") or "neutral",
+                        json.dumps(getattr(item, "emotion_tags", []) or [], ensure_ascii=False),
                         float(getattr(item, "sentiment_confidence", 0) or 0),
                         item.intent, float(item.intent_strength),
                         getattr(item, "position_status", "unknown") or "unknown",
@@ -781,11 +843,11 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                 cur.executemany(
                     """INSERT INTO mom_index_analysis
                        (run_id,sector,post_id,title,platform,newbie_score,newbie_confidence,
-                        level,sentiment_score,sentiment_label,sentiment_confidence,intent,intent_strength,
+                        level,sentiment_score,sentiment_label,emotion_tags_json,sentiment_confidence,intent,intent_strength,
                         position_status,market_outlook,content_type,key_signals_json,reasoning,
                         matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
                         prompt_version,analysis_engine,content_hash)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     rows,
                 )
             cur.execute(
@@ -852,6 +914,7 @@ def _to_analysis_like(row: Dict) -> SimpleNamespace:
         reasoning="",
         sentiment_score=score,
         sentiment_label=label,
+        emotion_tags=_parse_json_list(row.get("emotion_tags_json")),
         sentiment_confidence=float(row.get("sentiment_confidence") or 1),
         sentiment_source="llm" if engine == "llm" else engine,
         intent=row.get("intent", "") or "neutral",
@@ -861,6 +924,16 @@ def _to_analysis_like(row: Dict) -> SimpleNamespace:
         content_type=content_type,
         key_signals=[],
     )
+
+
+def _parse_json_list(value) -> List[str]:
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _week_start(day: date) -> str:
@@ -896,6 +969,7 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
                     a.newbie_score,
                     a.sentiment_score,
                     a.sentiment_label,
+                    a.emotion_tags_json,
                     a.sentiment_confidence,
                     a.intent,
                     a.intent_strength,
@@ -1113,7 +1187,7 @@ def _comparison_model_batches(cur, target_day: Optional[date] = None):
 def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
     cur.execute(
         """SELECT run_id, sector, post_id, title, platform, newbie_score,
-                  newbie_confidence, level, sentiment_score, sentiment_label,
+                  newbie_confidence, level, sentiment_score, sentiment_label, emotion_tags_json,
                   sentiment_confidence, intent, intent_strength, position_status,
                   market_outlook, content_type, analysis_engine, reasoning,
                   content_hash,
@@ -1230,7 +1304,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 SELECT a.batch_id, a.run_id, a.analysis_profile, a.model_name,
                        a.prompt_version, a.analysis_engine, a.content_hash,
                        a.sector, a.platform, a.post_id, a.title, a.level,
-                       a.sentiment_score, a.sentiment_label, a.sentiment_confidence,
+                       a.sentiment_score, a.sentiment_label, a.emotion_tags_json, a.sentiment_confidence,
                        a.intent, a.intent_strength, a.position_status,
                        a.market_outlook, a.content_type, a.reasoning,
                        p.content, p.url, p.author, p.post_date, p.post_datetime,
@@ -1285,6 +1359,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 "content_type": "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion"),
                 "sentiment_score": float(row.get("sentiment_score") or 0),
                 "sentiment_label": row.get("sentiment_label") or "neutral",
+                "emotion_tags": _parse_json_list(row.get("emotion_tags_json")),
                 "sentiment_confidence": float(row.get("sentiment_confidence") or 0),
                 "intent": row.get("intent") or "neutral",
                 "intent_strength": float(row.get("intent_strength") or 0),
@@ -1326,7 +1401,7 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
                 """
                 SELECT a.id, a.analysis_profile, a.sector, a.platform, a.post_id,
                        a.title, a.newbie_score, a.level, a.sentiment_score,
-                       a.sentiment_label, a.sentiment_confidence, a.intent,
+                       a.sentiment_label, a.emotion_tags_json, a.sentiment_confidence, a.intent,
                        a.intent_strength, a.position_status, a.market_outlook,
                        a.content_type, a.analysis_engine, p.post_datetime
                 FROM mom_index_analysis a

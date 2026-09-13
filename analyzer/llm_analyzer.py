@@ -193,6 +193,7 @@ class AnalysisResult:
     reasoning: str = ""        # 人类可读的推理过程
     sentiment_score: float = 0  # -1(恐慌) ~ +1(贪婪)
     sentiment_label: str = "neutral"  # fear/greed/neutral/mixed
+    emotion_tags: List[str] = field(default_factory=list)
     emotion_intensity: float = 0.0    # 0~1 情绪强度
     sentiment_confidence: float = 0.0 # 0~1 置信度
     sentiment_source: str = "rules"   # rules / llm
@@ -550,6 +551,7 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
 
     result.sentiment_score = llm_decision.sentiment_score
     result.sentiment_label = llm_decision.sentiment_label
+    result.emotion_tags = llm_decision.emotion_tags
     result.emotion_intensity = llm_decision.emotion_intensity
     result.sentiment_confidence = llm_decision.confidence
     result.sentiment_source = llm_decision.source
@@ -565,6 +567,7 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
     if result.content_type == "news":
         result.sentiment_score = 0
         result.sentiment_label = "neutral"
+        result.emotion_tags = []
         result.emotion_intensity = 0
         result.intent = "neutral"
         result.intent_strength = 0

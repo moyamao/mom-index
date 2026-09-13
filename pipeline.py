@@ -18,7 +18,7 @@ from analyzer.index_calculator import (
 )
 from storage.mysql_store import (
     mysql_enabled, persist_pipeline_run, fetch_keyword_history, fetch_model_comparison,
-    fetch_latest_collection_today, persist_standalone_analysis,
+    fetch_latest_collection_today, filter_posts_pending_analysis, persist_standalone_analysis,
 )
 from keyword_config import get_keywords, get_sector_catalog
 from runtime_config import ini_get, ini_get_bool, ini_get_int
@@ -99,6 +99,7 @@ def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
                 "level": getattr(analysis, "level", "") or "",
                 "sentiment_score": float(getattr(analysis, "sentiment_score", 0) or 0),
                 "sentiment_label": getattr(analysis, "sentiment_label", "neutral") or "neutral",
+                "emotion_tags": getattr(analysis, "emotion_tags", []) or [],
                 "emotion_intensity": float(getattr(analysis, "emotion_intensity", 0) or 0),
                 "sentiment_confidence": float(getattr(analysis, "sentiment_confidence", 0) or 0),
                 "sentiment_source": getattr(analysis, "sentiment_source", "rules") or "rules",
@@ -446,14 +447,28 @@ def run_pipeline():
     all_posts = _deconflict_cross_sector_posts(all_posts)
     all_posts = _dedupe_posts_by_title(all_posts)
     all_posts, analysis_windows = _filter_recent_posts(all_posts)
+
+    if mysql_enabled():
+        from analyzer.llm_sentiment import llm_profile
+        all_posts, pending_stats = filter_posts_pending_analysis(all_posts, llm_profile())
+        print(
+            "  [模型去重] "
+            f"待分析 {pending_stats['pending']} 条；"
+            f"已由当前模型分析 {pending_stats['already_analyzed']} 条；"
+            f"批内重复 {pending_stats['duplicates']} 条"
+        )
     
     total_collected = sum(len(v) for v in all_posts.values())
     print(f"\n  共采集 {total_collected} 条帖子\n")
     
     # ===== 第2步: LLM分析 =====
     print("🧠 第2步: LLM 多维度分析")
-    with local_llm_for_analysis():
-        analysis_results = analyze_all(all_posts)
+    if total_collected:
+        with local_llm_for_analysis():
+            analysis_results = analyze_all(all_posts)
+    else:
+        analysis_results = {sector: [] for sector in all_posts}
+        print("  没有当前模型尚未分析的新帖子，跳过 LLM 启动")
     
     for sector, results in analysis_results.items():
         news_count = sum(getattr(r, "content_type", "opinion") == "news" or r.level == "资讯帖" for r in results)

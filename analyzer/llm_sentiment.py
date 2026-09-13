@@ -4,7 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import requests
 
@@ -20,6 +20,7 @@ class LlmSentimentDecision:
     content_type: str
     sentiment_score: float
     sentiment_label: str
+    emotion_tags: List[str]
     emotion_intensity: float
     intent: str
     intent_strength: float
@@ -86,8 +87,8 @@ def llm_profile() -> str:
 def llm_prompt_version() -> str:
     return (
         os.environ.get("MOM_INDEX_LLM_PROMPT_VERSION", "").strip()
-        or ini_get("llm", "prompt_version", "sentiment-v4").strip()
-        or "sentiment-v4"
+        or ini_get("llm", "prompt_version", "sentiment-v6").strip()
+        or "sentiment-v6"
     )
 
 
@@ -241,6 +242,7 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         content_type=_normalize_content_type(parsed.get("content_type", "opinion")),
         sentiment_score=_clamp(float(parsed.get("sentiment_score", 0.0)), -1.0, 1.0),
         sentiment_label=_normalize_sentiment_label(parsed.get("sentiment_label", "neutral")),
+        emotion_tags=_normalize_emotion_tags(parsed.get("emotion_tags", [])),
         emotion_intensity=_clamp(float(parsed.get("emotion_intensity", 0.0)), 0.0, 1.0),
         intent=_normalize_intent(parsed.get("intent", "neutral")),
         intent_strength=_clamp(float(parsed.get("intent_strength", 0.0)), 0.0, 1.0),
@@ -271,18 +273,22 @@ def _system_prompt(*, include_reasoning: bool) -> str:
         "你是中文投资社媒情绪分析助手。"
         "先判断帖子是个人投资观点 opinion，还是新闻、公告、研报、产业资料等资讯 news。"
         "只有 opinion 才提取发帖人的情绪、交易意图、当前持仓状态和本人对未来走势的观点，不是替用户预测股票涨跌。"
-        "重点区分：恐慌、贪婪、中性、混合；以及买入、卖出、观望。"
+        "重点区分：恐慌、贪婪、中性、混合；以及买入、加仓、持有、减仓、卖出、清仓、观望。"
+        "交易意图按作者准备采取的动作判断：无仓新建仓为buy，已有仓继续买为add，明确继续持有为hold，"
+        "降低仓位为reduce，一般卖出为sell，明确全部退出为clear，无明确操作为neutral。"
         "要识别反讽、口嗨、转述新闻、纯资讯、情绪宣泄。"
-        "如果 content_type=news，情绪必须 neutral、分数和强度必须为0、意图必须neutral、仓位和未来观点必须unknown。"
+        "如果 content_type=news，情绪必须neutral、emotion_tags必须为空数组、分数和强度必须为0、"
+        "意图必须neutral、仓位和未来观点必须unknown。"
         "investor_maturity 只判断作者本人：明确自称投资新手或提出基础投资问题才是 novice；"
         "产品文案中的‘新手上手’、面向新手的教程标题、新闻公告、机构稿和引用他人说法都不是作者的新手证据，应为 not_applicable。"
         "请只输出 JSON，不要输出 markdown。"
         "字段必须包含："
         '{"content_type":"opinion|news",'
         '"sentiment_label":"fear|greed|neutral|mixed",'
+        '"emotion_tags":["anxiety|anger|excitement|optimism|pessimism|disappointment|regret|sarcasm|calm"],'
         '"sentiment_score":-1.0,'
         '"emotion_intensity":0.0,'
-        '"intent":"buy|sell|neutral",'
+        '"intent":"buy|add|hold|reduce|sell|clear|neutral",'
         '"intent_strength":0.0,'
         '"position_status":"none|holding|trapped|exited|unknown",'
         '"market_outlook":"bullish|bearish|sideways|unknown",'
@@ -317,6 +323,18 @@ def _normalize_sentiment_label(value: Any) -> str:
     return "neutral"
 
 
+def _normalize_emotion_tags(value: Any) -> List[str]:
+    allowed = {
+        "anxiety", "anger", "excitement", "optimism", "pessimism",
+        "disappointment", "regret", "sarcasm", "calm",
+    }
+    values = value if isinstance(value, list) else [value]
+    return list(dict.fromkeys(
+        str(item).strip().lower() for item in values
+        if str(item).strip().lower() in allowed
+    ))
+
+
 def _normalize_content_type(value: Any) -> str:
     raw = str(value or "opinion").strip().lower()
     return raw if raw in {"opinion", "news"} else "opinion"
@@ -324,10 +342,16 @@ def _normalize_content_type(value: Any) -> str:
 
 def _normalize_intent(value: Any) -> str:
     raw = str(value or "neutral").strip().lower()
-    if raw in {"buy", "sell", "neutral"}:
+    if raw in {"buy", "add", "hold", "reduce", "sell", "clear", "neutral"}:
         return raw
-    if raw in {"hold", "observe", "watch"}:
-        return "neutral"
+    aliases = {
+        "add_position": "add", "increase": "add", "accumulate": "add",
+        "reduce_position": "reduce", "trim": "reduce",
+        "exit": "clear", "liquidate": "clear",
+        "observe": "neutral", "watch": "neutral", "wait": "neutral",
+    }
+    if raw in aliases:
+        return aliases[raw]
     return "neutral"
 
 

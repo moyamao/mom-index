@@ -142,7 +142,7 @@ body {
 }
 .llm-profile {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 6px;
   margin-top: 10px;
 }
@@ -158,6 +158,7 @@ body {
 }
 .llm-metric span { display:block; color:#64748b; font-size:9px; }
 .llm-metric strong { display:block; color:#e2e8f0; font-size:11px; margin-top:2px; }
+.count-list { line-height: 1.65; word-spacing: 3px; }
 .card .delta-row {
   margin-top: 10px;
   display: flex;
@@ -549,6 +550,12 @@ function dominantMetric(counts, labels, excluded = []) {
   return `${labels[key] || key} ${Math.round(count / total * 100)}%`;
 }
 
+function countSummary(counts, labels) {
+  return Object.entries(labels)
+    .map(([key, label]) => `${label}${Number((counts || {})[key] || 0)}`)
+    .join(' · ');
+}
+
 function directionLabel(value, positive, negative, neutral = '中性') {
   if (value >= 15) return positive;
   if (value <= -15) return negative;
@@ -589,7 +596,10 @@ function renderCards(data) {
     const divergence = d.platform_divergence ?? 0;
     const llm = d.llm_profile || {};
     const analysisWindow = d.analysis_window || {};
-    const sentimentText = dominantMetric(llm.sentiment, {fear:'恐慌', greed:'贪婪', neutral:'中性', mixed:'混合'});
+    const sentimentText = countSummary(llm.sentiment, {fear:'恐慌', greed:'贪婪', neutral:'中性', mixed:'混合'});
+    const positionText = countSummary(llm.position, {none:'空仓', holding:'持有', trapped:'被套', exited:'已退出', unknown:'未知'});
+    const intentText = countSummary(llm.intent, {buy:'买入', add:'加仓', hold:'持有', reduce:'减仓', sell:'卖出', clear:'清仓', neutral:'观望'});
+    const emotionTagsText = countSummary(llm.emotion_tags, {anxiety:'焦虑', anger:'愤怒', excitement:'兴奋', optimism:'乐观', pessimism:'悲观', disappointment:'失望', regret:'后悔', sarcasm:'嘲讽', calm:'平静'});
     const sentimentIndex = Number(llm.market_sentiment_index || 0);
     const outlookIndex = Number(llm.outlook_index || 0);
     const hasSentiment = Boolean(llm.has_sentiment_data ?? (llm.analyzed_posts > 0));
@@ -662,10 +672,11 @@ function renderCards(data) {
           <span>平台情绪差</span><span style="color:${divergence >= 20 ? '#f87171' : divergence >= 10 ? '#facc15' : '#4ade80'}">${divergence}</span>
         </div>
         <div class="llm-profile">
-          <div class="llm-metric"><span>情绪构成</span><strong>${sentimentText}</strong></div>
-          <div class="llm-metric"><span>持仓样本</span><strong>${llm.known_position_posts || 0}/${llm.analyzed_posts || 0}帖</strong></div>
-          <div class="llm-metric"><span>观点构成</span><strong>涨${llm.bullish_ratio || 0}% · 跌${llm.bearish_ratio || 0}%</strong></div>
-          <div class="llm-metric"><span>模型覆盖</span><strong>${llm.analyzed_posts || 0}帖 · ${llm.coverage_ratio || 0}%</strong></div>
+          <div class="llm-metric"><span>1 情绪（帖子数）</span><strong class="count-list">${sentimentText}</strong></div>
+          <div class="llm-metric"><span>2 持仓状况（帖子数）</span><strong class="count-list">${positionText}</strong></div>
+          <div class="llm-metric"><span>3 操作意图（帖子数）</span><strong class="count-list">${intentText}</strong></div>
+          <div class="llm-metric"><span>4 具体情绪（可多选，帖子数）</span><strong class="count-list">${emotionTagsText}</strong></div>
+          <div class="llm-metric"><span>统计口径</span><strong>${llm.analyzed_posts || 0}篇个人观点 · LLM覆盖 ${llm.coverage_ratio || 0}%</strong></div>
         </div>
         <div class="platform-breakdown">${platformChips || '<span class="source-chip">暂无平台拆分</span>'}</div>
         <div class="detail-row source-row">

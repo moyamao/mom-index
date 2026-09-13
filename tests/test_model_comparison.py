@@ -22,7 +22,7 @@ class ModelComparisonRowTest(unittest.TestCase):
         )
         rows = list(_iter_analysis_rows(1, {"storage": [item]}, {"storage": [{"id": "p1"}]}, 2))
         self.assertEqual(len(rows), 1)
-        self.assertEqual(len(rows[0]), 26)
+        self.assertEqual(len(rows[0]), 27)
 
     def test_reconstructs_current_llm_fields(self):
         item = _to_analysis_like({

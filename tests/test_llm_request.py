@@ -1,4 +1,6 @@
 import unittest
+
+from analyzer.llm_sentiment import _normalize_emotion_tags
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -17,6 +19,11 @@ def _response():
 
 
 class LlmRequestTest(unittest.TestCase):
+    def test_emotion_tags_are_limited_and_deduplicated(self):
+        self.assertEqual(
+            _normalize_emotion_tags(["anger", "anxiety", "anger", "unknown"]),
+            ["anger", "anxiety"],
+        )
     @patch("analyzer.llm_sentiment._max_chars", return_value=1200)
     @patch("analyzer.llm_sentiment._timeout_seconds", return_value=60)
     @patch("analyzer.llm_sentiment.llm_ready", return_value=True)

@@ -375,7 +375,11 @@ const CONTENT_TYPES = ['opinion', 'news', 'spam'];
 const INTENT_NAMES = {
   all: '全部',
   buy: '买入',
+  add: '加仓',
+  hold: '持有',
+  reduce: '减仓',
   sell: '卖出',
+  clear: '清仓',
   neutral: '观望',
 };
 
@@ -398,8 +402,8 @@ function fmtSentiment(score) {
 }
 
 function intentBadge(intent) {
-  if (intent === 'buy') return 'intent-buy';
-  if (intent === 'sell') return 'intent-sell';
+  if (intent === 'buy' || intent === 'add') return 'intent-buy';
+  if (intent === 'sell' || intent === 'reduce' || intent === 'clear') return 'intent-sell';
   return 'intent-neutral';
 }
 
@@ -513,8 +517,9 @@ function filterItems(items) {
   });
 }
 
-const POSITION_NAMES = {holding:'持有', trapped:'被套', none:'空仓', unknown:'未知'};
+const POSITION_NAMES = {holding:'持有', trapped:'被套', none:'空仓', exited:'已退出', unknown:'未知'};
 const OUTLOOK_NAMES = {bullish:'看涨', bearish:'看跌', sideways:'震荡', unknown:'未知'};
+const EMOTION_TAG_NAMES = {anxiety:'焦虑', anger:'愤怒', excitement:'兴奋', optimism:'乐观', pessimism:'悲观', disappointment:'失望', regret:'后悔', sarcasm:'嘲讽', calm:'平静'};
 
 function renderAnalysis(analysis) {
   const isLlm = analysis.analysis_engine === 'llm';
@@ -527,6 +532,7 @@ function renderAnalysis(analysis) {
         <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM' : '规则回退'}</span>
         <span class="model-value">类别 <strong>${isNews ? '资讯' : analysis.content_type === 'spam' ? '无效' : '观点'}</strong></span>
         <span class="model-value">情绪 <strong>${isNews ? '不参与' : `${score >= 0 ? '+' : ''}${score}`}</strong></span>
+        <span class="model-value">具体情绪 <strong>${isNews ? '不参与' : (analysis.emotion_tags || []).map(tag => EMOTION_TAG_NAMES[tag] || tag).join('、') || '未识别'}</strong></span>
         <span class="model-value">意图 <strong>${escapeHtml(INTENT_NAMES[analysis.intent] || '观望')}</strong></span>
         <span class="model-value">仓位 <strong>${escapeHtml(POSITION_NAMES[analysis.position_status] || '未知')}</strong></span>
         <span class="model-value">预期 <strong>${escapeHtml(OUTLOOK_NAMES[analysis.market_outlook] || '未知')}</strong></span>
