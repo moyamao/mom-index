@@ -551,9 +551,11 @@ function dominantMetric(counts, labels, excluded = []) {
 }
 
 function countSummary(counts, labels) {
-  return Object.entries(labels)
-    .map(([key, label]) => `${label}${Number((counts || {})[key] || 0)}`)
-    .join(' · ');
+  const items = Object.entries(labels)
+    .map(([key, label]) => [label, Number((counts || {})[key] || 0)])
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${label}${count}`);
+  return items.join(' · ') || '暂无识别结果';
 }
 
 function directionLabel(value, positive, negative, neutral = '中性') {
