@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from storage.mysql_store import (
     _analysis_key,
+    _default_comparison_day,
     _iter_analysis_rows,
     _shared_llm_keys,
     _to_analysis_like,
@@ -11,6 +12,22 @@ from storage.mysql_store import (
 
 
 class ModelComparisonRowTest(unittest.TestCase):
+    def test_early_morning_batch_defaults_to_previous_complete_day(self):
+        rows = [
+            {"post_datetime": datetime(2026, 9, 13, 23)},
+            {"post_datetime": datetime(2026, 9, 14, 0, 30)},
+        ]
+        batch = {"completed_at": datetime(2026, 9, 14, 3, 55)}
+        self.assertEqual(_default_comparison_day(batch, rows), date(2026, 9, 13))
+
+    def test_daytime_batch_defaults_to_latest_source_day(self):
+        rows = [
+            {"post_datetime": datetime(2026, 9, 13, 23)},
+            {"post_datetime": datetime(2026, 9, 14, 10)},
+        ]
+        batch = {"completed_at": datetime(2026, 9, 14, 12)}
+        self.assertEqual(_default_comparison_day(batch, rows), date(2026, 9, 14))
+
     def test_pipeline_analysis_row_matches_extended_schema(self):
         item = SimpleNamespace(
             post_id="p1", title="看涨", platform="xueqiu", newbie_score=0,

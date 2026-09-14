@@ -1116,6 +1116,17 @@ def _latest_model_batches(cur) -> List[Dict]:
     return cur.fetchall()
 
 
+def _default_comparison_day(anchor: Dict, anchor_rows: List[Dict]) -> date:
+    source_days = {_row_day(row) for row in anchor_rows}
+    source_days.discard(None)
+    completed_at = anchor.get("completed_at") or anchor.get("started_at")
+    if isinstance(completed_at, datetime) and completed_at.hour < 6:
+        previous_day = completed_at.date() - timedelta(days=1)
+        if previous_day in source_days:
+            return previous_day
+    return max(source_days, default=beijing_now().date())
+
+
 def _comparison_model_batches(cur, target_day: Optional[date] = None):
     """Use the newest result, adding a second model only when it covers the same posts."""
     latest_batches = _latest_model_batches(cur)
@@ -1124,8 +1135,7 @@ def _comparison_model_batches(cur, target_day: Optional[date] = None):
     anchor = latest_batches[0]
     anchor_rows = _batch_analysis_rows(cur, anchor["id"])
     if target_day is None:
-        source_days = [_row_day(row) for row in anchor_rows]
-        target_day = max((day for day in source_days if day), default=beijing_now().date())
+        target_day = _default_comparison_day(anchor, anchor_rows)
     profiles = [batch["profile"] for batch in latest_batches[:2]]
     if len(profiles) < 2:
         return [anchor], {anchor["profile"]: anchor_rows}, target_day

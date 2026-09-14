@@ -733,7 +733,11 @@ function renderModelSwitcher(data) {
       button.textContent = `${item.profile} · ${item.completed_at || '-'}`;
       button.onclick = () => {
         active = item.profile;
-        activeDate = (data.model_daily_snapshots?.[active] || []).at(-1)?.date || '';
+        const targetSnapshots = data.model_daily_snapshots?.[active] || [];
+        const comparisonDate = data.model_comparison?.comparison_date || '';
+        activeDate = targetSnapshots.some(snapshot => snapshot.date === comparisonDate)
+          ? comparisonDate
+          : targetSnapshots.at(-1)?.date || '';
         render();
       };
       return button;
