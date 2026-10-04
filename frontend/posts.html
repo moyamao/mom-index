@@ -554,10 +554,15 @@ function renderPosts(items) {
     const typeLabels = [...new Set(analyses.map(a => a.content_type === 'news' ? '资讯' : a.content_type === 'spam' ? '无效' : '个人观点'))];
     const intentLabels = [...new Set(analyses.filter(a => a.content_type !== 'news').map(a => INTENT_NAMES[a.intent] || '观望'))];
     const scoredAnalyses = analyses.filter(a => a.analysis_engine === 'llm' && a.content_type === 'opinion');
-    const averageSentiment = scoredAnalyses.length
+    const scores = scoredAnalyses.map(a => Number(a.sentiment_score || 0) * 100);
+    const hasDisagreement = scores.length > 1 && (
+      Math.max(...scores) - Math.min(...scores) >= 50 ||
+      (Math.min(...scores) < -15 && Math.max(...scores) > 15)
+    );
+    const averageSentiment = scoredAnalyses.length && !hasDisagreement
       ? Math.round(scoredAnalyses.reduce((sum, a) => sum + Number(a.sentiment_score || 0), 0) / scoredAnalyses.length * 100)
       : null;
-    const averageLabel = averageSentiment == null ? '仅计数' : averageSentiment >= 15 ? '贪婪' : averageSentiment <= -15 ? '恐慌' : '中性';
+    const averageLabel = hasDisagreement ? '模型分歧 · 不计算均值' : averageSentiment == null ? '仅计数' : averageSentiment >= 15 ? '贪婪' : averageSentiment <= -15 ? '恐慌' : '中性';
     return `
     <article class="post-card">
       <div class="post-head">
@@ -572,8 +577,8 @@ function renderPosts(items) {
           </div>
         </div>
         <div class="score-box">
-          <div class="score-main">${averageSentiment == null ? '资讯' : `${averageSentiment >= 0 ? '+' : ''}${averageSentiment}`}</div>
-          <div class="score-sub">${averageLabel}${averageSentiment == null ? '' : ' · 双模型情绪均值'}</div>
+          <div class="score-main">${hasDisagreement ? '分歧' : averageSentiment == null ? '资讯' : `${averageSentiment >= 0 ? '+' : ''}${averageSentiment}`}</div>
+          <div class="score-sub">${averageLabel}${averageSentiment == null || scoredAnalyses.length < 2 ? '' : ' · 双模型情绪均值'}</div>
         </div>
       </div>
 

@@ -260,7 +260,12 @@ def _truncate_text(*, title: str, content: str, max_chars: int) -> str:
     text = re.sub(r"\s+", " ", text)
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + "..."
+    if max_chars < 80:
+        return text[:max_chars]
+    separator = " ...[中间省略]... "
+    head_chars = int((max_chars - len(separator)) * 0.65)
+    tail_chars = max_chars - len(separator) - head_chars
+    return text[:head_chars] + separator + text[-tail_chars:]
 
 
 def _system_prompt(*, include_reasoning: bool) -> str:
@@ -273,6 +278,10 @@ def _system_prompt(*, include_reasoning: bool) -> str:
         "你是中文投资社媒情绪分析助手。"
         "先判断帖子是个人投资观点 opinion，还是新闻、公告、研报、产业资料等资讯 news。"
         "只有 opinion 才提取发帖人的情绪、交易意图、当前持仓状态和本人对未来走势的观点，不是替用户预测股票涨跌。"
+        "情绪分数只表示作者本人此刻的情绪，不是股价涨跌幅、公司经营好坏或未来看涨看跌的分数。"
+        "区分历史行情和作者态度：叙述亏损、下跌、利好或引用他人言论，不自动判为恐慌或贪婪；"
+        "看涨预期与当前焦虑可以并存，缺少明确情绪证据时给中性0。"
+        "同时出现明确正负情绪时标为mixed，分数靠近0；极端分数仅用于作者强烈且明确的情绪表达。"
         "重点区分：恐慌、贪婪、中性、混合；以及买入、加仓、持有、减仓、卖出、清仓、观望。"
         "交易意图按作者准备采取的动作判断：无仓新建仓为buy，已有仓继续买为add，明确继续持有为hold，"
         "降低仓位为reduce，一般卖出为sell，明确全部退出为clear，无明确操作为neutral。"
