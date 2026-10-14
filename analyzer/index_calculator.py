@@ -33,9 +33,14 @@ def _compute_llm_profile(posts: List) -> Dict:
               for name in ("buy", "add", "hold", "reduce", "sell", "clear", "neutral")}
     outlook = {name: sum(getattr(r, "market_outlook", "unknown") == name for r in llm_posts)
                for name in ("bullish", "bearish", "sideways", "unknown")}
-    weight = sum(max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1) for r in llm_posts)
+    def sentiment_weight(item):
+        return max(float(getattr(item, "sentiment_confidence", 0) or 0), 0.1) * float(
+            getattr(item, "disagreement_weight", 1.0)
+        )
+
+    weight = sum(sentiment_weight(r) for r in llm_posts)
     sentiment_index = round(sum(
-        float(getattr(r, "sentiment_score", 0) or 0) * max(float(getattr(r, "sentiment_confidence", 0) or 0), 0.1)
+        float(getattr(r, "sentiment_score", 0) or 0) * sentiment_weight(r)
         for r in llm_posts
     ) / weight * 100, 1) if weight else 0.0
     known_positions = sum(position[name] for name in ("none", "holding", "trapped", "exited"))
@@ -46,6 +51,7 @@ def _compute_llm_profile(posts: List) -> Dict:
         "sentiment": sentiment, "emotion_tags": emotion_tags,
         "position": position, "intent": intent, "outlook": outlook,
         "market_sentiment_index": sentiment_index,
+        "disagreement_posts": sum(getattr(r, "disagreement_weight", 1.0) < 1 for r in llm_posts),
         "outlook_index": round((outlook["bullish"] - outlook["bearish"]) / max(known_outlooks, 1) * 100, 1),
         "known_position_posts": known_positions, "known_outlook_posts": known_outlooks,
         "holding_ratio": ratio(position["holding"], known_positions),

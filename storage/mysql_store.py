@@ -1240,6 +1240,33 @@ def _shared_llm_keys(rows_by_profile: Dict[str, List[Dict]], target_day: Optiona
     return set.intersection(*key_sets) if key_sets else set()
 
 
+def _disagreement_keys(rows_by_profile: Dict[str, List[Dict]], target_day: Optional[date] = None) -> set:
+    """Flag large opinion-score gaps only across distinct models on the same post."""
+    scores = defaultdict(dict)
+    for profile, rows in rows_by_profile.items():
+        for row in rows:
+            if row.get("analysis_engine") != "llm" or row.get("content_type") != "opinion":
+                continue
+            day = _row_day(row)
+            key = _analysis_key(row)
+            if not key or (target_day is not None and day != target_day):
+                continue
+            scores[(day, key)].setdefault(profile, float(row.get("sentiment_score") or 0) * 100)
+    return {
+        (day, key) for (day, key), by_profile in scores.items()
+        if len(by_profile) > 1 and (
+            max(by_profile.values()) - min(by_profile.values()) >= 50
+            or (min(by_profile.values()) < -15 and max(by_profile.values()) > 15)
+        )
+    }
+
+
+def _weighted_analysis(row: Dict, disagreement_keys: set) -> SimpleNamespace:
+    item = _to_analysis_like(row)
+    item.disagreement_weight = 0.25 if (_row_day(row), _analysis_key(row)) in disagreement_keys else 1.0
+    return item
+
+
 def fetch_model_comparison() -> Dict:
     """Compare newest model batches on their exact shared, successful LLM sample."""
     if not mysql_enabled():
@@ -1250,6 +1277,7 @@ def fetch_model_comparison() -> Dict:
             _ensure_tables(cur)
             batches, rows_by_profile, target_day = _comparison_model_batches(cur)
             shared_keys = _shared_llm_keys(rows_by_profile, target_day)
+            disagreement_keys = _disagreement_keys(rows_by_profile, target_day)
             profiles = []
             from analyzer.index_calculator import compute_sector_index
             for batch in batches:
@@ -1260,7 +1288,7 @@ def fetch_model_comparison() -> Dict:
                         unique_rows.setdefault(key, row)
                 by_sector = defaultdict(list)
                 for row in unique_rows.values():
-                    by_sector[row["sector"]].append(_to_analysis_like(row))
+                    by_sector[row["sector"]].append(_weighted_analysis(row, disagreement_keys))
                 completed = batch.get("completed_at")
                 profiles.append({
                     "profile": batch["profile"],
@@ -1272,6 +1300,7 @@ def fetch_model_comparison() -> Dict:
                     "llm_posts": batch["llm_posts"],
                     "failed_posts": batch["failed_posts"],
                     "comparison_posts": len(shared_keys),
+                    "disagreement_posts": len(disagreement_keys),
                     "comparison_scope": "shared-successful-llm-posts",
                     "comparison_date": target_day.isoformat(),
                     "sectors": {},
@@ -1291,6 +1320,7 @@ def fetch_model_comparison() -> Dict:
                 "comparison_scope": "最新模型结果；其他模型仅在覆盖同一发布日期及同一帖子时加入对比",
                 "comparison_date": target_day.isoformat(),
                 "comparison_posts": len(shared_keys),
+                "disagreement_posts": len(disagreement_keys),
                 "profiles": profiles,
             }
     finally:
@@ -1426,6 +1456,10 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
             )
             rows = cur.fetchall()
 
+        rows_by_profile = defaultdict(list)
+        for row in rows:
+            rows_by_profile[row["analysis_profile"]].append(row)
+        disagreement_keys = _disagreement_keys(rows_by_profile)
         seen = set()
         grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
         for row in rows:
@@ -1437,7 +1471,7 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
                 continue
             seen.add(key)
             grouped[row["analysis_profile"]][day.isoformat()][row["sector"]].append(
-                _to_analysis_like(row)
+                _weighted_analysis(row, disagreement_keys)
             )
 
         from analyzer.index_calculator import compute_sector_index
