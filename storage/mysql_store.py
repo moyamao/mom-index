@@ -239,6 +239,8 @@ def _ensure_tables(cur) -> None:
             prompt_version VARCHAR(64) NOT NULL DEFAULT 'legacy',
             analysis_engine VARCHAR(16) NOT NULL DEFAULT 'rules',
             content_hash CHAR(64) DEFAULT '',
+            adjudication_source VARCHAR(40) DEFAULT '',
+            adjudication_json LONGTEXT,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             KEY idx_mom_index_analysis_run_id (run_id),
             KEY idx_mom_index_analysis_sector (sector),
@@ -259,6 +261,8 @@ def _ensure_tables(cur) -> None:
         "emotion_tags_json": "TEXT",
         "sentiment_confidence": "DECIMAL(6,4) NOT NULL DEFAULT 0",
         "content_type": "VARCHAR(16) NOT NULL DEFAULT 'opinion'",
+        "adjudication_source": "VARCHAR(40) DEFAULT ''",
+        "adjudication_json": "LONGTEXT",
     }
     for column, definition in analysis_columns.items():
         if not _column_exists(cur, "mom_index_analysis", column):
@@ -611,7 +615,7 @@ def fetch_posts_for_analysis(
                 AND NOT EXISTS (
                     SELECT 1 FROM mom_index_analysis a
                     WHERE a.analysis_profile = %s
-                      AND a.analysis_engine = 'llm'
+                      AND a.analysis_engine IN ('llm', 'insufficient', 'llm_failed')
                       AND a.platform = c.platform
                       AND (
                           (COALESCE(c.post_id, '') <> '' AND a.post_id = c.post_id)
@@ -659,6 +663,66 @@ def fetch_posts_for_analysis(
         conn.close()
 
 
+def fetch_reference_analyses(
+    posts: Dict[str, List[Dict]], analysis_profile: str = "mini-14b",
+    analysis_engines: tuple[str, ...] = ("llm",),
+) -> Dict[str, Dict]:
+    """Return the latest stored LLM analysis for each requested source post."""
+    wanted_ids = set()
+    wanted_hashes = set()
+    for items in posts.values():
+        for post in items:
+            platform = _normalize_identity_text(post.get("platform"))
+            post_id = _normalize_identity_text(post.get("id") or post.get("post_id"))
+            if post_id:
+                wanted_ids.add((platform, post_id))
+            else:
+                wanted_hashes.add((platform, _content_hash(post)))
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            placeholders = ",".join(["%s"] * len(analysis_engines))
+            cur.execute(
+                f"""SELECT id,batch_id,analysis_profile,model_name,prompt_version,analysis_engine,
+                          platform,post_id,content_hash,content_type,sentiment_score,
+                          sentiment_label,emotion_tags_json,sentiment_confidence,intent,
+                          intent_strength,position_status,market_outlook,newbie_score,
+                          newbie_confidence,level,reasoning
+                   FROM mom_index_analysis
+                   WHERE analysis_profile=%s AND analysis_engine IN ({placeholders})
+                   ORDER BY id DESC""",
+                (analysis_profile, *analysis_engines),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    references: Dict[str, Dict] = {}
+    for row in rows:
+        platform = _normalize_identity_text(row.get("platform"))
+        post_id = _normalize_identity_text(row.get("post_id"))
+        content_hash = str(row.get("content_hash") or "")
+        if post_id and (platform, post_id) in wanted_ids:
+            key = f"id|{platform}|{post_id}"
+        elif content_hash and (platform, content_hash) in wanted_hashes:
+            key = f"hash|{platform}|{content_hash}"
+        else:
+            continue
+        references.setdefault(key, dict(row))
+    return references
+
+
+def reference_analysis_key(post: Dict) -> str:
+    """Build the lookup key used by fetch_reference_analyses."""
+    platform = _normalize_identity_text(post.get("platform"))
+    post_id = _normalize_identity_text(post.get("id") or post.get("post_id"))
+    if post_id:
+        return f"id|{platform}|{post_id}"
+    return f"hash|{platform}|{_content_hash(post)}"
+
+
 def filter_posts_pending_analysis(
     all_posts: Dict[str, List[Dict]], analysis_profile: str
 ) -> tuple[Dict[str, List[Dict]], Dict[str, int]]:
@@ -675,7 +739,7 @@ def filter_posts_pending_analysis(
             cur.execute(
                 """SELECT platform, post_id, content_hash
                    FROM mom_index_analysis
-                   WHERE analysis_profile=%s AND analysis_engine='llm'""",
+                   WHERE analysis_profile=%s AND analysis_engine IN ('llm','insufficient','llm_failed')""",
                 (analysis_profile,),
             )
             analyzed_rows = cur.fetchall()
@@ -838,6 +902,8 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                         json.dumps(item.matched_pro, ensure_ascii=False), batch_id, llm_profile(),
                         llm_model_name(), llm_prompt_version(), item.sentiment_source,
                         _content_hash(post),
+                        getattr(item, "adjudication_source", "") or "",
+                        getattr(item, "adjudication_json", "") or "",
                     ))
             if rows:
                 cur.executemany(
@@ -846,8 +912,8 @@ def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[s
                         level,sentiment_score,sentiment_label,emotion_tags_json,sentiment_confidence,intent,intent_strength,
                         position_status,market_outlook,content_type,key_signals_json,reasoning,
                         matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
-                        prompt_version,analysis_engine,content_hash)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        prompt_version,analysis_engine,content_hash,adjudication_source,adjudication_json)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     rows,
                 )
             cur.execute(
@@ -934,6 +1000,16 @@ def _parse_json_list(value) -> List[str]:
     except (json.JSONDecodeError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _parse_json_dict(value) -> Dict:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _week_start(day: date) -> str:
@@ -1128,7 +1204,7 @@ def _default_comparison_day(anchor: Dict, anchor_rows: List[Dict]) -> date:
 
 
 def _comparison_model_batches(cur, target_day: Optional[date] = None):
-    """Use the newest result, adding a second model only when it covers the same posts."""
+    """Use newest production/local profiles and align batches by same-post overlap."""
     latest_batches = _latest_model_batches(cur)
     if not latest_batches:
         return [], {}, target_day
@@ -1136,7 +1212,12 @@ def _comparison_model_batches(cur, target_day: Optional[date] = None):
     anchor_rows = _batch_analysis_rows(cur, anchor["id"])
     if target_day is None:
         target_day = _default_comparison_day(anchor, anchor_rows)
-    profiles = [batch["profile"] for batch in latest_batches[:2]]
+    preferred = ("local-consensus-cloud", "macbook-27b", "mini-14b", "mini-17b")
+    by_profile = {batch["profile"]: batch for batch in latest_batches}
+    profiles = [profile for profile in preferred if profile in by_profile][:3]
+    if anchor["profile"] not in profiles:
+        profiles.insert(0, anchor["profile"])
+        profiles = profiles[:3]
     if len(profiles) < 2:
         return [anchor], {anchor["profile"]: anchor_rows}, target_day
 
@@ -1180,13 +1261,18 @@ def _comparison_model_batches(cur, target_day: Optional[date] = None):
                 keys_by_batch[row["batch_id"]].add(key)
 
     anchor_keys = keys_by_batch.get(anchor["id"], set())
-    second = max(
-        candidates[profiles[1]],
-        key=lambda batch: (len(anchor_keys & keys_by_batch[batch["id"]]), int(batch["id"])),
-        default=None,
-    )
-    overlap = len(anchor_keys & keys_by_batch.get(second["id"], set())) if second else 0
-    selected = [anchor] + ([second] if second and overlap else [])
+    selected = [anchor]
+    for profile in profiles:
+        if profile == anchor["profile"]:
+            continue
+        matched = max(
+            candidates[profile],
+            key=lambda batch: (len(anchor_keys & keys_by_batch[batch["id"]]), int(batch["id"])),
+            default=None,
+        )
+        overlap = len(anchor_keys & keys_by_batch.get(matched["id"], set())) if matched else 0
+        if matched and overlap:
+            selected.append(matched)
     selected.sort(key=lambda batch: batch.get("completed_at") or datetime.min, reverse=True)
     return selected, {
         batch["profile"]: anchor_rows if batch["id"] == anchor["id"] else _batch_analysis_rows(cur, batch["id"])
@@ -1327,6 +1413,84 @@ def fetch_model_comparison() -> Dict:
         conn.close()
 
 
+def fetch_production_summary() -> Dict:
+    """Return coverage and final-source metrics for the three-stage model pipeline."""
+    if not mysql_enabled():
+        return {}
+    profiles = ("mini-14b", "macbook-27b", "local-consensus-cloud")
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            cur.execute("SELECT COUNT(*) AS n FROM mom_index_post_catalog")
+            collected = int(cur.fetchone()["n"])
+            rows_by_profile = {}
+            llm_keys_by_profile = {}
+            latest_by_profile = {}
+            source_by_key = {}
+            review_keys = set()
+            for profile in profiles:
+                cur.execute(
+                    """SELECT id,sector,platform,post_id,content_hash,created_at,analysis_engine,
+                              adjudication_source,adjudication_json
+                       FROM mom_index_analysis
+                       WHERE analysis_profile=%s AND analysis_engine IN ('llm','insufficient','llm_failed')
+                       ORDER BY id DESC""",
+                    (profile,),
+                )
+                keys = set()
+                llm_keys = set()
+                latest = None
+                for row in cur.fetchall():
+                    key = _analysis_key(row)
+                    if not key or key in keys:
+                        continue
+                    keys.add(key)
+                    if row.get("analysis_engine") == "llm":
+                        llm_keys.add(key)
+                    latest = latest or row.get("created_at")
+                    if profile == "local-consensus-cloud":
+                        source = row.get("adjudication_source") or "unknown"
+                        source_by_key[key] = source
+                        try:
+                            audit = json.loads(row.get("adjudication_json") or "{}")
+                        except (TypeError, json.JSONDecodeError):
+                            audit = {}
+                        if audit.get("requires_review") or "failure" in source:
+                            review_keys.add(key)
+                rows_by_profile[profile] = keys
+                llm_keys_by_profile[profile] = llm_keys
+                latest_by_profile[profile] = latest.strftime("%Y-%m-%d %H:%M:%S") if latest else ""
+
+        small = rows_by_profile["mini-14b"]
+        large = rows_by_profile["macbook-27b"]
+        final = rows_by_profile["local-consensus-cloud"]
+        paired = llm_keys_by_profile["mini-14b"] & llm_keys_by_profile["macbook-27b"]
+        source_counts = defaultdict(int)
+        for source in source_by_key.values():
+            source_counts[source] += 1
+        return {
+            "collected_posts": collected,
+            "small_model_posts": len(small),
+            "large_model_posts": len(large),
+            "paired_posts": len(paired),
+            "final_posts": len(final),
+            "waiting_27b": len(small - large),
+            "waiting_final": len(paired - final),
+            "cloud_adjudications": sum(
+                count for source, count in source_counts.items()
+                if source in {"cloud_adjudication", "cloud_after_27b_failure"}
+            ),
+            "local_agreements": source_counts.get("stored_agreement_27b", 0),
+            "review_posts": len(review_keys),
+            "source_counts": dict(source_counts),
+            "latest_by_profile": latest_by_profile,
+            "production_profile": "local-consensus-cloud",
+        }
+    finally:
+        conn.close()
+
+
 def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
     """Return the union of posts in latest model batches, grouped by post identity."""
     if not mysql_enabled():
@@ -1347,6 +1511,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                        a.sentiment_score, a.sentiment_label, a.emotion_tags_json, a.sentiment_confidence,
                        a.intent, a.intent_strength, a.position_status,
                        a.market_outlook, a.content_type, a.reasoning,
+                       a.adjudication_source, a.adjudication_json,
                        p.content, p.url, p.author, p.post_date, p.post_datetime,
                        p.raw_json
                 FROM mom_index_analysis a
@@ -1406,6 +1571,8 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 "position_status": row.get("position_status") or "unknown",
                 "market_outlook": row.get("market_outlook") or "unknown",
                 "reasoning": row.get("reasoning") or "",
+                "adjudication_source": row.get("adjudication_source") or "",
+                "adjudication": _parse_json_dict(row.get("adjudication_json")),
             }
 
         items = list(grouped.values())

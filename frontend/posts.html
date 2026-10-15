@@ -528,8 +528,9 @@ function renderAnalysis(analysis) {
   return `
     <section class="model-result ${isLlm ? '' : 'fallback'}">
       <div class="model-result-line">
-        <span class="model-result-name">${escapeHtml(analysis.profile)}</span>
+        <span class="model-result-name">${escapeHtml(analysis.profile === 'local-consensus-cloud' ? '生产最终结果' : analysis.profile)}</span>
         <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM' : '规则回退'}</span>
+        ${analysis.adjudication_source ? `<span class="badge sector">${escapeHtml(analysis.adjudication_source === 'cloud_adjudication' ? '云端裁决' : analysis.adjudication_source === 'cloud_after_27b_failure' ? '27B失败·云端接管' : analysis.adjudication_source === 'stored_agreement_27b' ? '采用27B' : analysis.adjudication_source)}</span>` : ''}
         <span class="model-value">类别 <strong>${isNews ? '资讯' : analysis.content_type === 'spam' ? '无效' : '观点'}</strong></span>
         <span class="model-value">情绪 <strong>${isNews ? '不参与' : `${score >= 0 ? '+' : ''}${score}`}</strong></span>
         <span class="model-value">具体情绪 <strong>${isNews ? '不参与' : (analysis.emotion_tags || []).map(tag => EMOTION_TAG_NAMES[tag] || tag).join('、') || '未识别'}</strong></span>
@@ -551,6 +552,7 @@ function renderPosts(items) {
 
   container.innerHTML = items.map(item => {
     const analyses = item.analyses || [];
+    const finalAnalysis = analyses.find(a => a.profile === 'local-consensus-cloud' && a.analysis_engine === 'llm');
     const typeLabels = [...new Set(analyses.map(a => a.content_type === 'news' ? '资讯' : a.content_type === 'spam' ? '无效' : '个人观点'))];
     const intentLabels = [...new Set(analyses.filter(a => a.content_type !== 'news').map(a => INTENT_NAMES[a.intent] || '观望'))];
     const scoredAnalyses = analyses.filter(a => a.analysis_engine === 'llm' && a.content_type === 'opinion');
@@ -559,10 +561,15 @@ function renderPosts(items) {
       Math.max(...scores) - Math.min(...scores) >= 50 ||
       (Math.min(...scores) < -15 && Math.max(...scores) > 15)
     );
-    const averageSentiment = scoredAnalyses.length && !hasDisagreement
+    const averageSentiment = finalAnalysis
+      ? Math.round(Number(finalAnalysis.sentiment_score || 0) * 100)
+      : scoredAnalyses.length && !hasDisagreement
       ? Math.round(scoredAnalyses.reduce((sum, a) => sum + Number(a.sentiment_score || 0), 0) / scoredAnalyses.length * 100)
       : null;
-    const averageLabel = hasDisagreement ? '模型分歧 · 不计算均值' : averageSentiment == null ? '仅计数' : averageSentiment >= 15 ? '贪婪' : averageSentiment <= -15 ? '恐慌' : '中性';
+    const sourceLabel = finalAnalysis?.adjudication_source === 'cloud_adjudication' ? '云端裁决'
+      : finalAnalysis?.adjudication_source === 'cloud_after_27b_failure' ? '27B失败·云端接管'
+      : finalAnalysis?.adjudication_source === 'stored_agreement_27b' ? '采用27B' : '生产最终结果';
+    const averageLabel = finalAnalysis ? sourceLabel : hasDisagreement ? '模型分歧 · 等待裁决' : averageSentiment == null ? '仅计数' : averageSentiment >= 15 ? '贪婪' : averageSentiment <= -15 ? '恐慌' : '中性';
     return `
     <article class="post-card">
       <div class="post-head">
@@ -577,8 +584,8 @@ function renderPosts(items) {
           </div>
         </div>
         <div class="score-box">
-          <div class="score-main">${hasDisagreement ? '分歧' : averageSentiment == null ? '资讯' : `${averageSentiment >= 0 ? '+' : ''}${averageSentiment}`}</div>
-          <div class="score-sub">${averageLabel}${averageSentiment == null || scoredAnalyses.length < 2 ? '' : ' · 双模型情绪均值'}</div>
+          <div class="score-main">${!finalAnalysis && hasDisagreement ? '分歧' : averageSentiment == null ? '资讯' : `${averageSentiment >= 0 ? '+' : ''}${averageSentiment}`}</div>
+          <div class="score-sub">${averageLabel}${finalAnalysis || averageSentiment == null || scoredAnalyses.length < 2 ? '' : ' · 本地模型情绪均值'}</div>
         </div>
       </div>
 
@@ -597,7 +604,7 @@ function renderPosts(items) {
 
       ${renderContent(item)}
 
-      <div class="section-title">模型判定对照 · 情绪范围 -100 至 +100</div>
+      <div class="section-title">小模型 / 27B / 生产最终结果对照 · 情绪范围 -100 至 +100</div>
       <div class="model-results">${(item.analyses || []).map(renderAnalysis).join('')}</div>
     </article>
   `}).join('');
@@ -615,7 +622,7 @@ fetch('/api/post-model-comparison', {cache: 'no-store'})
     allItems = data.items || [];
     modelProfiles = data.profiles || [];
     renderSummary(allItems);
-    el('summary').insertAdjacentHTML('afterbegin', `<div class="subtitle" style="margin-bottom:12px">当前结果日期：北京时间 ${escapeHtml(data.comparison_date || '未知')}。展示最新模型结果${modelProfiles.length > 1 ? '及同帖双模型对照' : '；暂无同日 27B 结果'}。</div>`);
+    el('summary').insertAdjacentHTML('afterbegin', `<div class="subtitle" style="margin-bottom:12px">当前结果日期：北京时间 ${escapeHtml(data.comparison_date || '未知')}。展示小模型、27B与生产最终结果；有云端裁决时以生产最终结果为准。</div>`);
 
     const platformCounts = allItems.reduce((acc, item) => {
       acc[item.platform] = (acc[item.platform] || 0) + 1;

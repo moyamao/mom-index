@@ -24,6 +24,17 @@ class LlmRequestTest(unittest.TestCase):
             _normalize_emotion_tags(["anger", "anxiety", "anger", "unknown"]),
             ["anger", "anxiety"],
         )
+
+    @patch("analyzer.llm_sentiment.llm_ready", return_value=True)
+    @patch("analyzer.llm_sentiment.requests.post")
+    def test_short_text_is_terminal_count_only_without_request(self, post, _ready):
+        result = analyze_sentiment_with_llm(
+            title="黄金ETF", content="", sector="gold", platform="xiaohongshu",
+            current_result=SimpleNamespace(),
+        )
+        self.assertEqual(result.source, "insufficient")
+        self.assertEqual(result.content_type, "news")
+        post.assert_not_called()
     @patch("analyzer.llm_sentiment._max_chars", return_value=1200)
     @patch("analyzer.llm_sentiment._timeout_seconds", return_value=60)
     @patch("analyzer.llm_sentiment.llm_ready", return_value=True)
@@ -41,7 +52,7 @@ class LlmRequestTest(unittest.TestCase):
         user_content = payload["messages"][1]["content"]
         self.assertLess(len(user_content), 1400)
         self.assertNotIn(long_content, user_content)
-        self.assertEqual(payload["max_tokens"], 256)
+        self.assertEqual(payload["max_tokens"], 384)
 
     @patch("analyzer.llm_sentiment._max_chars", return_value=1200)
     @patch("analyzer.llm_sentiment._timeout_seconds", return_value=60)
@@ -60,6 +71,24 @@ class LlmRequestTest(unittest.TestCase):
         first = post.call_args_list[0].kwargs["json"]["messages"][1]["content"]
         second = post.call_args_list[1].kwargs["json"]["messages"][1]["content"]
         self.assertLess(len(second), len(first))
+
+    @patch("analyzer.llm_sentiment._max_chars", return_value=1200)
+    @patch("analyzer.llm_sentiment._timeout_seconds", return_value=60)
+    @patch("analyzer.llm_sentiment.llm_ready", return_value=True)
+    @patch("analyzer.llm_sentiment.requests.post")
+    def test_invalid_json_retries_twice(self, post, _ready, _timeout, _chars):
+        invalid = Mock()
+        invalid.raise_for_status.return_value = None
+        invalid.json.return_value = {"choices": [{"message": {"content": "not json"}}]}
+        post.side_effect = [invalid, invalid, _response()]
+
+        result = analyze_sentiment_with_llm(
+            title="标题", content="有效正文内容", sector="storage", platform="weibo",
+            current_result=SimpleNamespace(),
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(post.call_count, 3)
 
 
 if __name__ == "__main__":

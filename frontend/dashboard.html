@@ -57,6 +57,16 @@ body {
 .model-name { font-weight:700;color:#f8fafc; }
 .model-meta { color:#94a3b8;font-size:12px;margin-top:5px;line-height:1.5; }
 .model-sectors { color:#cbd5e1;font-size:12px;margin-top:8px;line-height:1.7; }
+.pipeline-panel { background:#1e293b;border:1px solid #334155;border-radius:12px;padding:18px;margin-bottom:18px; }
+.pipeline-title { display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px; }
+.pipeline-title p { color:#94a3b8;font-size:12px;margin-top:5px; }
+.pipeline-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px; }
+.pipeline-stat { background:#172033;border:1px solid #334155;border-radius:10px;padding:12px; }
+.pipeline-stat strong { display:block;font-size:24px;color:#f8fafc;margin-top:4px; }
+.pipeline-stat span { color:#94a3b8;font-size:11px; }
+.pipeline-stat.final { border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.06); }
+.pipeline-stat.cloud { border-color:rgba(96,165,250,.55);background:rgba(59,130,246,.06); }
+.pipeline-flow { color:#cbd5e1;font-size:12px;margin-top:12px;line-height:1.8; }
 .model-switcher { display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px; }
 .model-switcher button { background:#1e293b;color:#cbd5e1;border:1px solid #475569;border-radius:999px;padding:9px 14px;cursor:pointer; }
 .model-switcher button.active { background:#1d4ed8;border-color:#60a5fa;color:#fff; }
@@ -444,6 +454,11 @@ body {
 </div>
 
 <div class="container">
+  <section class="pipeline-panel" id="pipeline-panel">
+    <div class="pipeline-title"><div><h3>生产模型流水线</h3><p>Mac mini 初判 → MacBook 27B 复判 → 重大分歧由云端裁决；生产页面采用最终结果。</p></div><span class="source-chip">最终 profile: local-consensus-cloud</span></div>
+    <div class="pipeline-grid" id="pipeline-grid"><div class="loading">正在读取覆盖状态…</div></div>
+    <div class="pipeline-flow" id="pipeline-flow"></div>
+  </section>
   <div class="model-switcher" id="model-switcher"></div>
   <div class="history-toolbar" id="history-toolbar">
     <span>查看历史日期</span>
@@ -530,6 +545,45 @@ const PLATFORM_NAMES = {
   xueqiu: '雪球',
   unknown: '其他',
 };
+const PROFILE_NAMES = {
+  'mini-14b': 'Mac mini 初判',
+  'mini-17b': 'Mac mini 初判',
+  'macbook-27b': 'MacBook 27B复判',
+  'local-consensus-cloud': '生产最终结果',
+};
+
+function profileName(profile) {
+  return PROFILE_NAMES[profile] || profile;
+}
+
+function renderProductionSummary(data) {
+  const summary = data.production_summary || {};
+  const grid = document.getElementById('pipeline-grid');
+  const flow = document.getElementById('pipeline-flow');
+  if (!summary.collected_posts && !summary.small_model_posts) {
+    grid.innerHTML = '<div class="loading">暂无生产流水线数据</div>';
+    flow.textContent = '';
+    return;
+  }
+  const stats = [
+    ['已采集', summary.collected_posts || 0, ''],
+    ['Mac mini已完成', summary.small_model_posts || 0, ''],
+    ['27B已完成', summary.large_model_posts || 0, ''],
+    ['已完成双模型配对', summary.paired_posts || 0, ''],
+    ['生产最终结果', summary.final_posts || 0, 'final'],
+    ['云端裁决', summary.cloud_adjudications || 0, 'cloud'],
+    ['等待27B', summary.waiting_27b || 0, ''],
+    ['等待生成最终结果', summary.waiting_final || 0, ''],
+    ['待人工复核', summary.review_posts || 0, ''],
+  ];
+  grid.innerHTML = stats.map(([label, value, cls]) =>
+    `<div class="pipeline-stat ${cls}"><span>${label}</span><strong>${Number(value).toLocaleString()}</strong></div>`
+  ).join('');
+  const local = summary.local_agreements || 0;
+  const cloud = summary.cloud_adjudications || 0;
+  const final = summary.final_posts || 0;
+  flow.textContent = `最终结果来源：本地一致/轻微差异采用27B ${local.toLocaleString()} 条；重大分歧采用云端 ${cloud.toLocaleString()} 条；最终覆盖 ${final.toLocaleString()} 条。`;
+}
 
 let keywordCharts = [];
 let sectorCharts = [];
@@ -704,10 +758,11 @@ function renderModelComparison(data) {
     card.className = 'model-item';
     const title = document.createElement('div');
     title.className = 'model-name';
-    title.textContent = `${item.profile} · ${item.model_name}`;
+    title.textContent = `${profileName(item.profile)} · ${item.model_name}`;
     const meta = document.createElement('div');
     meta.className = 'model-meta';
-    meta.textContent = `${item.completed_at || '-'} · 原批次 ${item.analyzed_posts}/${item.requested_posts} · LLM成功 ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 北京时间 ${comparisonDate} ${profiles.length > 1 ? '共同样本' : '最新样本'} ${item.comparison_posts || 0}帖 · 提示词 ${item.prompt_version}`;
+    const realLatest = data.production_summary?.latest_by_profile?.[item.profile] || item.completed_at || '-';
+    meta.textContent = `最新完成 ${realLatest} · 当前对照批次 ${item.completed_at || '-'} · 对照批次 ${item.analyzed_posts}/${item.requested_posts} · LLM成功 ${item.llm_posts || 0} · 失败 ${item.failed_posts || 0} · 北京时间 ${comparisonDate} ${profiles.length > 1 ? '共同样本' : '最新样本'} ${item.comparison_posts || 0}帖 · 提示词 ${item.prompt_version}`;
     const sectors = document.createElement('div');
     sectors.className = 'model-sectors';
     sectors.textContent = SECTOR_ORDER.filter(key => item.sectors?.[key]).map(key => `${SECTOR_NAMES[key] || key} ${item.sectors[key].index}`).join('　');
@@ -724,13 +779,16 @@ function renderModelSwitcher(data) {
     renderCards(data);
     return;
   }
-  let active = profiles[0].profile;
+  let active = (profiles.find(item => item.profile === 'local-consensus-cloud')
+    || profiles.find(item => item.profile === 'macbook-27b') || profiles[0]).profile;
   let activeDate = data.model_comparison?.comparison_date || '';
   const render = () => {
     switcher.replaceChildren(...profiles.map(item => {
       const button = document.createElement('button');
       button.className = item.profile === active ? 'active' : '';
-      button.textContent = `${item.profile} · ${item.completed_at || '-'}`;
+      const latestCompleted = data.production_summary?.latest_by_profile?.[item.profile]
+        || item.completed_at || '-';
+      button.textContent = `${profileName(item.profile)} · 最新 ${latestCompleted}`;
       button.onclick = () => {
         active = item.profile;
         const targetSnapshots = data.model_daily_snapshots?.[active] || [];
@@ -1249,6 +1307,7 @@ fetch('/api/dashboard-data', {cache: 'no-store'})
   })
   .then(data => {
     applySectorCatalog(data.sector_catalog);
+    renderProductionSummary(data);
     renderModelSwitcher(data);
     renderModelComparison(data);
     renderKeywordHistory(data);

@@ -19,8 +19,10 @@ class LauncherTests(unittest.TestCase):
             server = Mock(pid=12345)
             task = Mock(pid=12346)
             task.wait.return_value = task_exit
+            cloud_task = Mock(pid=12347)
+            cloud_task.wait.return_value = 0
             with patch.object(launcher,'ROOT',root), patch.object(launcher.shutil,'which',return_value='/llama-server'), \
-                 patch.object(launcher,'require_free_port'), patch.object(launcher.subprocess,'Popen',side_effect=[server,task]) as popen, \
+                 patch.object(launcher,'require_free_port'), patch.object(launcher.subprocess,'Popen',side_effect=[server,task,cloud_task]) as popen, \
                  patch.object(launcher,'wait_ready',side_effect=ready_error,return_value=str(model)), \
                  patch.object(launcher,'stop_owned') as stop:
                 if ready_error:
@@ -32,8 +34,9 @@ class LauncherTests(unittest.TestCase):
                     self.assertTrue(popen.call_args.kwargs['start_new_session'])
                     env=popen.call_args.kwargs['env']
                     self.assertEqual(env['MOM_INDEX_LLM_MODEL'],str(model))
+                    self.assertEqual(env['CONSENSUS_27B_MODEL'],str(model))
                     self.assertEqual(env['MOM_INDEX_RUNTIME_ROLE'],'analyst')
-                    stop.assert_any_call(task)
+                    stop.assert_any_call(cloud_task if task_exit == 0 else task)
                 stop.assert_any_call(server)
 
     def test_normal_completion_closes_owned_processes(self):
@@ -57,6 +60,19 @@ class LauncherTests(unittest.TestCase):
         with patch.object(launcher.os,'killpg') as kill:
             launcher.stop_owned(process)
             kill.assert_called_once_with(12345,launcher.signal.SIGTERM)
+
+    def test_python_selection_skips_active_environment_without_dependencies(self):
+        with patch.object(launcher, 'ROOT', Path('/project')), \
+             patch.object(launcher.sys, 'executable', '/bad/venv/python3'), \
+             patch.object(Path, 'is_file', return_value=True), \
+             patch.object(launcher, '_python_dependency_error', side_effect=['missing requests', 'missing requests', '']):
+            self.assertEqual(launcher.select_python(), '/usr/bin/python3')
+
+    def test_explicit_python_with_missing_dependencies_fails_early(self):
+        with patch.object(launcher.shutil, 'which', return_value='/custom/python3'), \
+             patch.object(launcher, '_python_dependency_error', return_value='missing requests'):
+            with self.assertRaisesRegex(RuntimeError, '缺少分析依赖'):
+                launcher.select_python('python3')
 
 
 if __name__=='__main__':

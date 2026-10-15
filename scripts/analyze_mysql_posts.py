@@ -22,9 +22,10 @@ def main() -> None:
     os.environ.setdefault("MOM_INDEX_LLM_MAX_POSTS_PER_RUN", str(max(1, args.limit)))
 
     from analyzer.llm_analyzer import analyze_all
-    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version, llm_ready
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_ready
     from analyzer.platform_trends import fetch_platform_trends
-    from storage.mysql_store import fetch_model_comparison, fetch_posts_for_analysis, persist_standalone_analysis
+    from storage.mysql_store import (fetch_model_comparison, fetch_posts_for_analysis,
+                                     fetch_production_summary, persist_standalone_analysis)
 
     if not llm_ready():
         raise SystemExit("27B LLM 未就绪，请检查 config.ini 或 MOM_INDEX_LLM_* / QWEN_BASE_URL")
@@ -33,7 +34,6 @@ def main() -> None:
         args.days,
         args.limit,
         analysis_profile="" if args.reanalyze_all else profile,
-        prompt_version="" if args.reanalyze_all else llm_prompt_version(),
     )
     total = sum(len(items) for items in posts.values())
     mode = "全部重算" if args.reanalyze_all else "仅补未分析"
@@ -50,6 +50,7 @@ def main() -> None:
         with open(dashboard_path, "r", encoding="utf-8") as handle:
             dashboard = json.load(handle)
         dashboard["model_comparison"] = fetch_model_comparison()
+        dashboard["production_summary"] = fetch_production_summary()
         dashboard["platform_sentiment_trends"] = fetch_platform_trends()
         with open(dashboard_path, "w", encoding="utf-8") as handle:
             json.dump(dashboard, handle, ensure_ascii=False, indent=2)

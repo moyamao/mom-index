@@ -19,6 +19,7 @@ from analyzer.index_calculator import (
 from storage.mysql_store import (
     mysql_enabled, persist_pipeline_run, fetch_keyword_history, fetch_model_comparison,
     fetch_latest_collection_today, filter_posts_pending_analysis, persist_standalone_analysis,
+    fetch_production_summary,
 )
 from keyword_config import get_keywords, get_sector_catalog
 from runtime_config import ini_get, ini_get_bool, ini_get_int
@@ -541,6 +542,7 @@ def run_pipeline():
         print(f"  平台情绪历史读取失败: {exc}")
     try:
         dashboard["model_comparison"] = fetch_model_comparison() if mysql_enabled() else {"profiles": []}
+        dashboard["production_summary"] = fetch_production_summary() if mysql_enabled() else {}
     except Exception as exc:
         dashboard["model_comparison"] = {"profiles": [], "note": str(exc)}
         print(f"  模型结果读取失败: {exc}")

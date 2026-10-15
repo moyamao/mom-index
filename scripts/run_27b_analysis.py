@@ -20,6 +20,46 @@ from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = Path('/Users/mhy/models/qwen3.8-27b/Qwen3.8-27B-Q8_0.gguf')
+REQUIRED_PYTHON_MODULES = ('requests', 'pymysql')
+
+
+def _python_dependency_error(executable):
+    imports = ';'.join(f'import {name}' for name in REQUIRED_PYTHON_MODULES)
+    try:
+        check = subprocess.run(
+            [str(executable), '-c', imports], stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    return '' if check.returncode == 0 else (check.stderr.strip().splitlines()[-1] if check.stderr.strip() else '依赖检查失败')
+
+
+def select_python(requested=None):
+    """Select an interpreter that can run the analysis before loading the model."""
+    if requested:
+        executable = shutil.which(requested) or requested
+        error = _python_dependency_error(executable)
+        if error:
+            raise RuntimeError(
+                f'指定的Python缺少分析依赖：{executable}（{error}）。'
+                f'请安装 {" ".join(REQUIRED_PYTHON_MODULES)}，或用 --python 指定可用解释器。'
+            )
+        return str(executable)
+
+    candidates = [ROOT / '.venv/bin/python3', Path(sys.executable), Path('/usr/bin/python3')]
+    checked = []
+    for candidate in candidates:
+        value = str(candidate)
+        if value in checked or not candidate.is_file():
+            continue
+        checked.append(value)
+        if not _python_dependency_error(value):
+            return value
+    raise RuntimeError(
+        '未找到同时安装 requests 和 pymysql 的Python解释器；'
+        '请创建项目.venv并安装依赖，或通过 --python 指定解释器。'
+    )
 
 
 def stop_owned(process):
@@ -89,6 +129,8 @@ def child_env(base_url, model_id, limit):
     env.setdefault('MOM_INDEX_LLM_TIMEOUT_SECONDS', '300')
     # Do not send a configured cloud credential to a local server.
     env['MOM_INDEX_LLM_API_KEY'] = 'local-no-auth'
+    env['CONSENSUS_27B_BASE_URL'] = base_url + '/v1'
+    env['CONSENSUS_27B_MODEL'] = model_id
     no_proxy = env.get('NO_PROXY', env.get('no_proxy', ''))
     env['NO_PROXY'] = env['no_proxy'] = ','.join(filter(None, [no_proxy, '127.0.0.1', 'localhost']))
     return env
@@ -135,7 +177,18 @@ def run(args):
                 if code:
                     print(f'计算任务退出码：{code}。请检查上方输出；不要将此视为全部入库成功。', flush=True)
                 else:
-                    print('计算任务正常结束，入库批次见上方输出。', flush=True)
+                    print('27B缺失记录补算结束；开始从MySQL筛选历史分歧并调用云端。', flush=True)
+                    adjudication = [args.python, '-u', str(ROOT / 'scripts/adjudicate_stored_results.py'),
+                                    '--days', str(args.days), '--limit', str(args.limit)]
+                    task_process = subprocess.Popen(
+                        adjudication, cwd=ROOT, env=child_env(base, model_id, args.limit),
+                        start_new_session=True,
+                    )
+                    code = task_process.wait()
+                    if code:
+                        print(f'云端裁决任务退出码：{code}。', flush=True)
+                    else:
+                        print('计算与云端裁决任务正常结束，入库批次见上方输出。', flush=True)
                 return code if code >= 0 else 128 - code
             finally:
                 # Repeated Ctrl+C must not interrupt cleanup of the owned server.
@@ -155,7 +208,7 @@ def main():
     ap = argparse.ArgumentParser(description='启动本机27B → 只计算MySQL帖子并入库 → 关闭模型服务')
     ap.add_argument('--model', type=Path, default=DEFAULT_MODEL)
     ap.add_argument('--llama-server', default='llama-server')
-    ap.add_argument('--python', default=sys.executable, help='计算任务使用的Python解释器')
+    ap.add_argument('--python', default=None, help='计算任务使用的Python解释器；默认自动选择依赖完整的环境')
     ap.add_argument('--port', type=int, default=8080)
     ap.add_argument('--context', type=int, default=4096)
     ap.add_argument('--days', type=int, default=7)
@@ -166,6 +219,7 @@ def main():
     args = ap.parse_args()
     if min(args.context, args.days, args.limit, args.startup_timeout) <= 0 or not 1 <= args.port <= 65535:
         ap.error('context/days/limit/startup-timeout必须大于0，port须为1至65535')
+    args.python = select_python(args.python)
     def interrupted(signum, frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, interrupted)

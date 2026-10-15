@@ -182,7 +182,14 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
 
     text = _truncate_text(title=title, content=content, max_chars=_max_chars())
     if len(text.strip()) < 8:
-        return None
+        return LlmSentimentDecision(
+            content_type="news", sentiment_score=0.0, sentiment_label="neutral",
+            emotion_tags=[], emotion_intensity=0.0, intent="neutral", intent_strength=0.0,
+            position_status="unknown", market_outlook="unknown",
+            investor_maturity="not_applicable", maturity_confidence=1.0, confidence=1.0,
+            reasoning="文本过短且缺少正文，信息不足，仅计数，不参与情绪和交易意图分析。",
+            source="insufficient",
+        )
 
     headers = {"Content-Type": "application/json"}
     if _api_key():
@@ -190,15 +197,14 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
 
     attempts = [text]
     shorter = _truncate_text(title=title, content=content, max_chars=min(500, _max_chars()))
-    if shorter != text:
-        attempts.append(shorter)
+    attempts.extend([shorter, shorter])
 
-    resp = None
+    parsed = None
     for attempt, analysis_text in enumerate(attempts, start=1):
         payload = {
             "model": _model(),
             "temperature": 0.1,
-            "max_tokens": _max_output_tokens(),
+            "max_tokens": max(384, _max_output_tokens()),
             "chat_template_kwargs": {"enable_thinking": False},
             "response_format": {"type": "json_object"},
             "messages": [
@@ -219,22 +225,19 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
                 json=payload,
                 timeout=_timeout_seconds(),
             )
-            break
-        except requests.exceptions.ReadTimeout:
+            resp.raise_for_status()
+            data = resp.json()
+            content_text = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+            parsed = _parse_json_payload(content_text)
+            if isinstance(parsed, dict):
+                break
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
             if attempt >= len(attempts):
-                raise
-
-    if resp is None:
-        return None
-    resp.raise_for_status()
-
-    data = resp.json()
-    content_text = (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
-    parsed = _parse_json_payload(content_text)
+                return None
     if not isinstance(parsed, dict):
         return None
 

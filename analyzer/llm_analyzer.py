@@ -211,6 +211,8 @@ class AnalysisResult:
     analysis_profile: str = "rules"
     model_name: str = "rules-v1"
     prompt_version: str = "rules-v1"
+    adjudication_source: str = ""
+    adjudication_json: str = ""
 
 
 def _newbie_level(score: float) -> str:
@@ -547,7 +549,14 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
 
     if not llm_decision:
         result.llm_error = "接口未返回可解析的 JSON 结果"
+        result.sentiment_source = "llm_failed"
         return
+
+    apply_llm_decision(result, llm_decision)
+
+
+def apply_llm_decision(result: AnalysisResult, llm_decision) -> None:
+    """Apply one normalized LLM decision to an AnalysisResult."""
 
     result.sentiment_score = llm_decision.sentiment_score
     result.sentiment_label = llm_decision.sentiment_label
@@ -645,19 +654,23 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
     budget = llm_max_posts_per_run()
     selected = candidates[:budget]
     success = 0
+    insufficient = 0
     failed = 0
     interval = llm_request_interval_seconds()
     for index, (_, _, post, result) in enumerate(selected):
         _apply_llm_second_pass(result, post)
         if result.sentiment_source == "llm":
             success += 1
+        elif result.sentiment_source == "insufficient":
+            insufficient += 1
         elif result.llm_error:
             failed += 1
         _refresh_key_signals(result)
         if interval and index < len(selected) - 1:
             time.sleep(interval)
 
-    print(f"  [LLM二判] 候选 {len(candidates)} 条，执行 {len(selected)} 条，成功 {success} 条，失败 {failed} 条")
+    print(f"  [LLM二判] 候选 {len(candidates)} 条，执行 {len(selected)} 条，"
+          f"成功 {success} 条，信息不足仅计数 {insufficient} 条，失败 {failed} 条")
     if failed:
         failed_results = [result for _, _, _, result in selected if result.llm_error]
         for result in failed_results[:3]:
