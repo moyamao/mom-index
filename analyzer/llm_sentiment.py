@@ -180,7 +180,7 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
     if not llm_ready():
         return None
 
-    text = _truncate_text(title=title, content=content, max_chars=_max_chars())
+    text = _analysis_text(title=title, content=content, platform=platform, max_chars=_max_chars())
     if len(text.strip()) < 8:
         return LlmSentimentDecision(
             content_type="news", sentiment_score=0.0, sentiment_label="neutral",
@@ -196,7 +196,7 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         headers["Authorization"] = f"Bearer {_api_key()}"
 
     attempts = [text]
-    shorter = _truncate_text(title=title, content=content, max_chars=min(500, _max_chars()))
+    shorter = _analysis_text(title=title, content=content, platform=platform, max_chars=min(500, _max_chars()))
     attempts.extend([shorter, shorter])
 
     parsed = None
@@ -258,6 +258,16 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
     )
 
 
+def _analysis_text(*, title: str, content: str, platform: str, max_chars: int) -> str:
+    if platform == "xueqiu":
+        match = re.match(r"^\s*回复\s*@[^:：\s]+\s*[:：]\s*(.*)", title or "", re.S)
+        if match:
+            reply = re.split(r"\s*//\s*@", match.group(1), maxsplit=1)[0].strip()
+            if reply:
+                return _truncate_text(title="本次回复", content=reply, max_chars=max_chars)
+    return _truncate_text(title=title, content=content, max_chars=max_chars)
+
+
 def _truncate_text(*, title: str, content: str, max_chars: int) -> str:
     text = (f"{title}\n\n{content}" if content else title).strip()
     text = re.sub(r"\s+", " ", text)
@@ -283,6 +293,7 @@ def _system_prompt(*, include_reasoning: bool) -> str:
         "只有 opinion 才提取发帖人的情绪、交易意图、当前持仓状态和本人对未来走势的观点，不是替用户预测股票涨跌。"
         "情绪分数只表示作者本人此刻的情绪，不是股价涨跌幅、公司经营好坏或未来看涨看跌的分数。"
         "区分历史行情和作者态度：叙述亏损、下跌、利好或引用他人言论，不自动判为恐慌或贪婪；"
+        "回复或转发旧帖时，只根据作者这一次新写的内容判断当下情绪、意图与仓位；被引用的旧帖不是当前表态。"
         "看涨预期与当前焦虑可以并存，缺少明确情绪证据时给中性0。"
         "同时出现明确正负情绪时标为mixed，分数靠近0；极端分数仅用于作者强烈且明确的情绪表达。"
         "重点区分：恐慌、贪婪、中性、混合；以及买入、加仓、持有、减仓、卖出、清仓、观望。"

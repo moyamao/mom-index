@@ -23,7 +23,7 @@ from .llm_sentiment import (
     _normalize_sentiment_label,
     _parse_json_payload,
     _system_prompt,
-    _truncate_text,
+    _analysis_text,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,7 +104,7 @@ def _decision(parsed: dict[str, Any]) -> LlmSentimentDecision:
 
 def call_model(config: dict[str, str], *, title: str, content: str, sector: str,
                platform: str, timeout: float, retries: int = 2) -> dict[str, Any]:
-    text = _truncate_text(title=title, content=content, max_chars=1200)
+    text = _analysis_text(title=title, content=content, platform=platform, max_chars=1200)
     headers = {"Content-Type": "application/json"}
     if config.get("api_key"):
         headers["Authorization"] = "Bearer " + config["api_key"]
