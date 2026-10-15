@@ -14,9 +14,12 @@ build/
 *.swp
 *.swo
 
-# 数据文件（可选 — 如果要跟踪数据则删除下面几行）
-# data/*.json
-# frontend/data/*.json
+# 运行生成的数据与测试产物（仅保留在本机）
+data/*.json
+frontend/data/*.json
+.artifact-work/
+outputs/
+qwen-benchmark/
 
 # 环境
 .env
