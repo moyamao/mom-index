@@ -585,6 +585,24 @@ def apply_llm_decision(result: AnalysisResult, llm_decision) -> None:
         result.newbie_score = 0
         result.level = "资讯帖"
         result.newbie_confidence = "high"
+    elif result.content_type == "spam":
+        result.sentiment_score = 0
+        result.sentiment_label = "neutral"
+        result.emotion_tags = []
+        result.emotion_intensity = 0
+        result.intent = "neutral"
+        result.intent_strength = 0
+        result.position_status = "unknown"
+        result.market_outlook = "unknown"
+        result.newbie_score = 0
+        result.level = "垃圾帖"
+        result.newbie_confidence = "high"
+    elif result.level in {"资讯帖", "垃圾帖"}:
+        # Clear a stale rule classification when the LLM/cloud verdict says this
+        # is an opinion. Maturity handling below may refine it further.
+        result.newbie_score = 25
+        result.level = _newbie_level(result.newbie_score)
+        result.newbie_confidence = "low"
     maturity = llm_decision.investor_maturity
     maturity_confidence = llm_decision.maturity_confidence
     if result.content_type == "news":

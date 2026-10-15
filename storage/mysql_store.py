@@ -976,7 +976,9 @@ def _to_analysis_like(row: Dict) -> SimpleNamespace:
     if label == "neutral" and score:
         label = "greed" if score > 0 else "fear"
     engine = row.get("analysis_engine") or "rules"
-    content_type = "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion")
+    # content_type is the authoritative LLM verdict. level is a legacy field and
+    # may still contain the pre-LLM rule classification (for example 资讯帖).
+    content_type = row.get("content_type") or ("news" if row.get("level") == "资讯帖" else "opinion")
     return SimpleNamespace(
         post_id=row.get("post_id", "") or "",
         title=row.get("title", "") or "",
@@ -1591,7 +1593,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 "completed_at": row["batch_completed_at"].strftime("%Y-%m-%d %H:%M:%S") if row.get("batch_completed_at") else "",
                 "prompt_version": row.get("prompt_version") or "",
                 "analysis_engine": row.get("analysis_engine") or "rules",
-                "content_type": "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion"),
+                "content_type": row.get("content_type") or ("news" if row.get("level") == "资讯帖" else "opinion"),
                 "sentiment_score": float(row.get("sentiment_score") or 0),
                 "sentiment_label": row.get("sentiment_label") or "neutral",
                 "emotion_tags": _parse_json_list(row.get("emotion_tags_json")),
