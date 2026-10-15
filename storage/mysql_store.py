@@ -1503,6 +1503,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
             if not batches:
                 return {"profiles": [], "items": []}
             placeholders = ",".join(["%s"] * len(batches))
+            next_day = target_day + timedelta(days=1)
             cur.execute(
                 f"""
                 SELECT a.batch_id, a.run_id, a.analysis_profile, a.model_name,
@@ -1512,16 +1513,20 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                        a.intent, a.intent_strength, a.position_status,
                        a.market_outlook, a.content_type, a.reasoning,
                        a.adjudication_source, a.adjudication_json,
+                       b.completed_at AS batch_completed_at,
                        p.content, p.url, p.author, p.post_date, p.post_datetime,
                        p.raw_json
                 FROM mom_index_analysis a
+                LEFT JOIN mom_index_analysis_batches b ON b.id=a.batch_id
                 LEFT JOIN mom_index_posts p
                   ON p.run_id=a.run_id AND p.sector=a.sector
                  AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
                 WHERE a.batch_id IN ({placeholders})
+                   OR (a.analysis_profile='local-consensus-cloud'
+                       AND p.post_datetime >= %s AND p.post_datetime < %s)
                 ORDER BY COALESCE(p.post_datetime, a.created_at) DESC, a.id DESC
                 """,
-                tuple(batch["id"] for batch in batches),
+                tuple(batch["id"] for batch in batches) + (target_day, next_day),
             )
             rows = cur.fetchall()
 
@@ -1558,7 +1563,11 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 "profile": profile,
                 "model_name": row.get("model_name") or "",
                 "batch_id": row.get("batch_id"),
-                "completed_at": meta.get("completed_at").strftime("%Y-%m-%d %H:%M:%S") if meta.get("completed_at") else "",
+                "completed_at": (
+                    meta.get("completed_at") or row.get("batch_completed_at")
+                ).strftime("%Y-%m-%d %H:%M:%S") if (
+                    meta.get("completed_at") or row.get("batch_completed_at")
+                ) else "",
                 "prompt_version": row.get("prompt_version") or "",
                 "analysis_engine": row.get("analysis_engine") or "rules",
                 "content_type": "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion"),

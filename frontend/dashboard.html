@@ -1000,40 +1000,30 @@ function buildKeywordCompareChart(canvasId, datasets, labels) {
   });
 }
 
-function parseDateKey(value) {
-  return new Date(`${value}T00:00:00`);
+function buildKeywordSeries(records, labelKey) {
+  // 没有采集到帖子不等于情绪中性；只连接真实日点/周点，避免用 0 制造假走势。
+  return [...records].sort((a, b) => String(a[labelKey]).localeCompare(String(b[labelKey])));
 }
 
-function toDateKey(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function buildContinuousSeries(records, labelKey, stepDays) {
-  if (!records.length) return [];
-  const sorted = [...records].sort((a, b) => String(a[labelKey]).localeCompare(String(b[labelKey])));
-  const start = parseDateKey(sorted[0][labelKey]);
-  const end = parseDateKey(sorted[sorted.length - 1][labelKey]);
-  const rowMap = new Map(sorted.map(row => [row[labelKey], row]));
-  const series = [];
-
-  for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + stepDays)) {
-    const key = toDateKey(cursor);
-    const row = rowMap.get(key);
-    series.push(row || {
-      [labelKey]: key,
-      index: 0,
-      post_count: 0,
-      synthetic: true,
-    });
-  }
-
-  return series;
+function keywordMiniScale(series) {
+  const values = series.map(row => Number(row.index)).filter(Number.isFinite);
+  if (!values.length) return { min: -10, max: 10 };
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  // 至少保留 20 个指数点的观察窗口，既能看清变化，也不会把微小波动过度放大。
+  const span = Math.max(high - low, 20);
+  const midpoint = (low + high) / 2;
+  return {
+    min: Math.max(-100, Math.floor(midpoint - span * 0.6)),
+    max: Math.min(100, Math.ceil(midpoint + span * 0.6)),
+  };
 }
 
 function buildKeywordMiniChart(canvasId, color, records, labelKey, mode) {
   const canvas = document.getElementById(canvasId);
   if (!canvas || !records.length) return null;
-  const series = buildContinuousSeries(records, labelKey, mode === 'weekly' ? 7 : 1);
+  const series = buildKeywordSeries(records, labelKey);
+  const scale = keywordMiniScale(series);
   canvas.style.width = `${Math.max(640, series.length * (mode === 'weekly' ? 12 : 4))}px`;
   const ctx = canvas.getContext('2d');
   return new Chart(ctx, {
@@ -1047,8 +1037,8 @@ function buildKeywordMiniChart(canvasId, color, records, labelKey, mode) {
         borderWidth: 2,
         fill: true,
         tension: mode === 'weekly' ? 0.18 : 0.12,
-        pointRadius: 0,
-        pointHoverRadius: 2,
+        pointRadius: mode === 'weekly' ? 2 : 0,
+        pointHoverRadius: 4,
       }]
     },
     options: {
@@ -1073,8 +1063,8 @@ function buildKeywordMiniChart(canvasId, color, records, labelKey, mode) {
       },
       scales: {
         y: {
-          min: -100,
-          max: 100,
+          min: scale.min,
+          max: scale.max,
           display: false,
         },
         x: {
@@ -1172,7 +1162,9 @@ function renderKeywordHistory(data) {
     const recordMap = activeMode === 'weekly' ? (payload.weekly || {}) : (payload.daily || {});
     const labelKey = activeMode === 'weekly' ? 'week' : 'date';
     const lengths = keywords.map(keyword => (recordMap[keyword] || []).length).filter(Boolean);
-    const pointRange = `${Math.min(...lengths, 0)}-${Math.max(...lengths, 0)}`;
+    const pointRange = lengths.length
+      ? `${Math.min(...lengths)}-${Math.max(...lengths)}`
+      : '0';
     const palette = buildSeriesPalette(SECTOR_COLORS[sector] || '#94a3b8', keywords.length);
     const allRows = Object.values(recordMap).flat();
     const allDates = allRows.map(row => row[labelKey]).filter(Boolean).sort();
