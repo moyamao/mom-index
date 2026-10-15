@@ -18,17 +18,28 @@ mkdir -p "$LOG_DIR"
 
 PORT="$($PYTHON_BIN -c 'from runtime_config import ini_get_int; print(ini_get_int("web", "port", 8081))')"
 
+is_project_web_process() {
+  local pid="$1"
+  [[ "$pid" == <-> ]] || return 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  local command
+  local process_cwd
+  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  process_cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+  [[ "$command" == *"scripts/web_server.py"* && "$process_cwd" == "$ROOT_DIR" ]]
+}
+
 stop_pid() {
   local pid="$1"
   [[ "$pid" == <-> ]] || return 0
   if ! kill -0 "$pid" 2>/dev/null; then
     return 0
   fi
-  local command
-  local process_cwd
-  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  process_cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
-  if [[ "$command" != *"scripts/web_server.py"* || "$process_cwd" != "$ROOT_DIR" ]]; then
+  if ! is_project_web_process "$pid"; then
+    local command
+    command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
     echo "跳过非本项目进程 PID $pid: $command" >&2
     return 0
   fi
@@ -53,6 +64,15 @@ rm -f "$PID_FILE"
 
 listener="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
 if [[ -n "$listener" ]]; then
+  listener_pid="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+  if is_project_web_process "$listener_pid" && \
+     curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/dashboard-data" >/dev/null 2>&1; then
+    echo "$listener_pid" > "$PID_FILE"
+    echo "Web 服务已由系统自动重新拉起: http://0.0.0.0:$PORT/dashboard.html"
+    echo "PID: $listener_pid"
+    echo "日志: $LOG_FILE"
+    exit 0
+  fi
   echo "错误: 端口 $PORT 仍被其他程序占用，未启动 Web 服务:" >&2
   echo "$listener" >&2
   exit 1

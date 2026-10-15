@@ -1492,17 +1492,33 @@ def fetch_production_summary() -> Dict:
 
 
 def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
-    """Return the union of posts in latest model batches, grouped by post identity."""
+    """Return latest source-day posts across local and production profiles."""
     if not mysql_enabled():
         return {"profiles": [], "items": []}
     conn = _connect()
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            batches, _, target_day = _comparison_model_batches(cur, target_day)
-            if not batches:
+            preferred_profiles = ("mini-14b", "macbook-27b", "local-consensus-cloud")
+            profile_placeholders = ",".join(["%s"] * len(preferred_profiles))
+            if target_day is None:
+                # A newly completed backlog batch may contain older posts. The detail
+                # page date must follow source-post recency, not batch completion time.
+                cur.execute(
+                    f"""
+                    SELECT MAX(p.post_datetime) AS latest_post_datetime
+                    FROM mom_index_analysis a
+                    INNER JOIN mom_index_posts p
+                      ON p.run_id=a.run_id AND p.sector=a.sector
+                     AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+                    WHERE a.analysis_profile IN ({profile_placeholders})
+                    """,
+                    preferred_profiles,
+                )
+                latest = cur.fetchone().get("latest_post_datetime")
+                target_day = latest.date() if isinstance(latest, datetime) else None
+            if target_day is None:
                 return {"profiles": [], "items": []}
-            placeholders = ",".join(["%s"] * len(batches))
             next_day = target_day + timedelta(days=1)
             cur.execute(
                 f"""
@@ -1521,17 +1537,16 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 LEFT JOIN mom_index_posts p
                   ON p.run_id=a.run_id AND p.sector=a.sector
                  AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
-                WHERE a.batch_id IN ({placeholders})
-                   OR (a.analysis_profile='local-consensus-cloud'
-                       AND p.post_datetime >= %s AND p.post_datetime < %s)
+                WHERE a.analysis_profile IN ({profile_placeholders})
+                  AND p.post_datetime >= %s AND p.post_datetime < %s
                 ORDER BY COALESCE(p.post_datetime, a.created_at) DESC, a.id DESC
                 """,
-                tuple(batch["id"] for batch in batches) + (target_day, next_day),
+                preferred_profiles + (target_day, next_day),
             )
             rows = cur.fetchall()
 
-        batch_meta = {batch["id"]: batch for batch in batches}
         grouped = {}
+        available_profiles = set()
         for row in rows:
             if _row_day(row) != target_day:
                 continue
@@ -1558,16 +1573,12 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
             profile = row.get("analysis_profile") or "unknown"
             if profile in item["analyses"]:
                 continue
-            meta = batch_meta.get(row.get("batch_id"), {})
+            available_profiles.add(profile)
             item["analyses"][profile] = {
                 "profile": profile,
                 "model_name": row.get("model_name") or "",
                 "batch_id": row.get("batch_id"),
-                "completed_at": (
-                    meta.get("completed_at") or row.get("batch_completed_at")
-                ).strftime("%Y-%m-%d %H:%M:%S") if (
-                    meta.get("completed_at") or row.get("batch_completed_at")
-                ) else "",
+                "completed_at": row["batch_completed_at"].strftime("%Y-%m-%d %H:%M:%S") if row.get("batch_completed_at") else "",
                 "prompt_version": row.get("prompt_version") or "",
                 "analysis_engine": row.get("analysis_engine") or "rules",
                 "content_type": "news" if row.get("level") == "资讯帖" else (row.get("content_type") or "opinion"),
@@ -1585,7 +1596,8 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
             }
 
         items = list(grouped.values())
-        profile_order = {batch["profile"]: index for index, batch in enumerate(reversed(batches))}
+        profiles = [profile for profile in preferred_profiles if profile in available_profiles]
+        profile_order = {profile: index for index, profile in enumerate(profiles)}
         for item in items:
             item["analyses"] = sorted(
                 item["analyses"].values(),
@@ -1597,7 +1609,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
         return {
             "timezone": "Asia/Shanghai",
             "comparison_date": target_day.isoformat(),
-            "profiles": [batch["profile"] for batch in reversed(batches)],
+            "profiles": profiles,
             "items": items,
         }
     finally:
