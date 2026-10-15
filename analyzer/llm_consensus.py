@@ -141,16 +141,13 @@ def call_model(config: dict[str, str], *, title: str, content: str, sector: str,
 
 
 def material_disagreements(first: LlmSentimentDecision, second: LlmSentimentDecision) -> list[str]:
-    """Return only disagreements strong enough to justify a paid cloud call."""
+    """Escalate only large score gaps or explicitly opposite trading directions."""
     differences = []
-    if first.content_type != second.content_type:
-        differences.append("content_type")
-
-    # Minor neutral/mixed/fear label boundary differences are common. Escalate only
-    # opposite emotional directions or a large score gap.
-    if {first.sentiment_label, second.sentiment_label} == {"fear", "greed"}:
-        differences.append("sentiment_label")
-    if abs(first.sentiment_score - second.sentiment_score) >= 0.50:
+    # 资讯/广告的“不参与”在指数中等价于 0 分。内容类型不同本身不值得
+    # 调用云端；只有折算后的有效情绪差距足够大才升级。
+    first_score = first.sentiment_score if first.content_type == "opinion" else 0.0
+    second_score = second.sentiment_score if second.content_type == "opinion" else 0.0
+    if abs(first_score - second_score) >= 0.30:
         differences.append("sentiment_score")
 
     buy_side = {"buy", "add"}
@@ -159,18 +156,10 @@ def material_disagreements(first: LlmSentimentDecision, second: LlmSentimentDeci
             or (first.intent in sell_side and second.intent in buy_side)):
         differences.append("intent")
 
-    # none and unknown are deliberately equivalent. Only an active position versus
-    # an explicit exit changes the actionable interpretation.
-    active_positions = {"holding", "trapped"}
-    if ((first.position_status in active_positions and second.position_status == "exited")
-            or (second.position_status in active_positions and first.position_status == "exited")):
-        differences.append("position_status")
-
     if {first.market_outlook, second.market_outlook} == {"bullish", "bearish"}:
         differences.append("market_outlook")
 
-    # investor_maturity and intent_strength are auxiliary fields and never trigger
-    # cloud adjudication by themselves.
+    # 内容类型、情绪标签、仓位、成熟度与强度字段都不单独触发云端。
     return differences
 
 

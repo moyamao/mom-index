@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import os
 import sys
@@ -17,6 +18,10 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--profile-14b", default="mini-14b")
     parser.add_argument("--profile-27b", default="macbook-27b")
+    parser.add_argument("--date", dest="target_date", type=date.fromisoformat,
+                        help="只处理指定源帖子日期，格式 YYYY-MM-DD")
+    parser.add_argument("--reanalyze-all", action="store_true",
+                        help="包含已有生产最终结果的帖子，并写入新的裁决批次")
     args = parser.parse_args()
 
     os.environ["MOM_INDEX_LLM_PROFILE"] = "local-consensus-cloud"
@@ -34,7 +39,10 @@ def main() -> None:
     # newer ordinary comparisons; the actual processed count still obeys --limit.
     candidate_limit = max(args.limit * 10, 5000)
     posts = fetch_posts_for_analysis(
-        args.days, candidate_limit, analysis_profile="local-consensus-cloud"
+        args.days,
+        candidate_limit,
+        analysis_profile="" if args.reanalyze_all else "local-consensus-cloud",
+        target_date=args.target_date,
     )
     refs14 = fetch_reference_analyses(posts, args.profile_14b)
     refs27 = fetch_reference_analyses(posts, args.profile_27b)
@@ -45,7 +53,9 @@ def main() -> None:
     results = {}
     selected_posts = {}
 
-    print(f"待裁决池={total}；本次上限={args.limit}；14B匹配={len(refs14)}；27B匹配={len(refs27)}；27B终态失败={len(failed27)}")
+    scope = f"指定日期={args.target_date.isoformat()}" if args.target_date else f"最近{args.days}天"
+    mode = "强制重算" if args.reanalyze_all else "仅补缺失"
+    print(f"范围={scope}；模式={mode}；待裁决池={total}；本次上限={args.limit}；14B匹配={len(refs14)}；27B匹配={len(refs27)}；27B终态失败={len(failed27)}")
     ordered_posts = [
         (sector, post) for sector, items in posts.items() for post in items
     ]
@@ -110,7 +120,8 @@ def main() -> None:
     if results:
         batch_id = persist_standalone_analysis(
             results, selected_posts,
-            note=f"stored consensus; paired={paired}; agreements={agreement_count}; cloud={cloud_count}",
+            note=(f"stored consensus; paired={paired}; agreements={agreement_count}; cloud={cloud_count}; "
+                  f"scope={scope}; mode={mode}"),
         )
         print(f"裁决完成并入库：batch_id={batch_id}；配对={paired}；一致={agreement_count}；分歧调用云端={cloud_count}")
     else:

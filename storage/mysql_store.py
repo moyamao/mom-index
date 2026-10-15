@@ -602,14 +602,20 @@ def fetch_posts_for_analysis(
     days: int = 7,
     limit: int = 1000,
     analysis_profile: str = "",
+    target_date: Optional[date] = None,
 ) -> Dict[str, List[Dict]]:
-    """Load newest source posts, optionally excluding successful profile analyses."""
+    """Load source posts by rolling window or one exact source date."""
     conn = _connect()
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
             missing_clause = ""
-            params: List[object] = [max(1, days)]
+            if target_date is not None:
+                date_clause = "c.post_datetime >= %s AND c.post_datetime < %s"
+                params: List[object] = [target_date, target_date + timedelta(days=1)]
+            else:
+                date_clause = "c.post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)"
+                params = [max(1, days)]
             if analysis_profile:
                 missing_clause = """
                 AND NOT EXISTS (
@@ -638,7 +644,7 @@ def fetch_posts_for_analysis(
                     GROUP BY content_key
                 ) latest ON latest.content_key = c.content_key
                 INNER JOIN mom_index_post_sightings s ON s.id = latest.newest_id
-                WHERE c.post_datetime >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                WHERE {date_clause}
                 {missing_clause}
                 ORDER BY c.post_datetime DESC
                 LIMIT %s
@@ -1341,7 +1347,7 @@ def _disagreement_keys(rows_by_profile: Dict[str, List[Dict]], target_day: Optio
     return {
         (day, key) for (day, key), by_profile in scores.items()
         if len(by_profile) > 1 and (
-            max(by_profile.values()) - min(by_profile.values()) >= 50
+            max(by_profile.values()) - min(by_profile.values()) >= 30
             or (min(by_profile.values()) < -15 and max(by_profile.values()) > 15)
         )
     }
@@ -1349,7 +1355,11 @@ def _disagreement_keys(rows_by_profile: Dict[str, List[Dict]], target_day: Optio
 
 def _weighted_analysis(row: Dict, disagreement_keys: set) -> SimpleNamespace:
     item = _to_analysis_like(row)
-    item.disagreement_weight = 0.25 if (_row_day(row), _analysis_key(row)) in disagreement_keys else 1.0
+    # 本地原始模型对尚未解决的分歧降权；生产 profile 已采用27B或云端裁决，
+    # 最终结果不应再次因为曾经存在分歧而受到惩罚。
+    is_production_final = row.get("analysis_profile") == "local-consensus-cloud"
+    is_disagreement = (_row_day(row), _analysis_key(row)) in disagreement_keys
+    item.disagreement_weight = 0.25 if is_disagreement and not is_production_final else 1.0
     return item
 
 

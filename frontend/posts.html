@@ -610,12 +610,18 @@ function renderPosts(items) {
   container.innerHTML = items.map(item => {
     const analyses = item.analyses || [];
     const finalAnalysis = analyses.find(a => a.profile === 'local-consensus-cloud' && a.analysis_engine === 'llm');
+    const hasCloudVerdict = ['cloud_adjudication', 'cloud_after_27b_failure'].includes(
+      finalAnalysis?.adjudication_source || ''
+    );
+    const comparisonAnalyses = hasCloudVerdict
+      ? analyses.filter(a => a !== finalAnalysis)
+      : analyses;
     const typeLabels = [...new Set(analyses.map(a => a.content_type === 'news' ? '资讯' : a.content_type === 'spam' ? '无效' : '个人观点'))];
     const intentLabels = [...new Set(analyses.filter(a => a.content_type !== 'news').map(a => INTENT_NAMES[a.intent] || '观望'))];
     const scoredAnalyses = analyses.filter(a => a.analysis_engine === 'llm' && a.content_type === 'opinion');
     const scores = scoredAnalyses.map(a => Number(a.sentiment_score || 0) * 100);
     const hasDisagreement = scores.length > 1 && (
-      Math.max(...scores) - Math.min(...scores) >= 50 ||
+      Math.max(...scores) - Math.min(...scores) >= 30 ||
       (Math.min(...scores) < -15 && Math.max(...scores) > 15)
     );
     const averageSentiment = finalAnalysis
@@ -663,8 +669,8 @@ function renderPosts(items) {
 
       ${renderCloudVerdict(finalAnalysis)}
 
-      <div class="section-title">小模型 / 27B / 生产最终结果对照 · 情绪范围 -100 至 +100</div>
-      <div class="model-results">${(item.analyses || []).map(renderAnalysis).join('')}</div>
+      <div class="section-title">${hasCloudVerdict ? '14B / 27B 本地模型对照（生产最终结果见上方云端裁决）' : '小模型 / 27B / 生产最终结果对照'} · 情绪范围 -100 至 +100</div>
+      <div class="model-results">${comparisonAnalyses.map(renderAnalysis).join('')}</div>
     </article>
   `}).join('');
 }

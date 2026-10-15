@@ -54,7 +54,12 @@ class ConsensusTests(unittest.TestCase):
         self.assertIn('intent',audit['disagreements'])
 
     def test_large_score_disagreement_uses_cloud(self):
-        self.assertIn('sentiment_score',material_disagreements(_decision(value(sentiment_score=-.4)),_decision(value(sentiment_score=.1))))
+        self.assertIn('sentiment_score',material_disagreements(_decision(value(sentiment_score=-.2)),_decision(value(sentiment_score=.1))))
+
+    def test_score_gap_below_thirty_points_skips_cloud(self):
+        self.assertEqual(material_disagreements(
+            _decision(value(sentiment_score=-.1)), _decision(value(sentiment_score=.19))
+        ), [])
 
     def test_cloud_failure_marks_review_and_falls_back_27b(self):
         result,audit,calls=self.invoke(
@@ -89,6 +94,16 @@ class ConsensusTests(unittest.TestCase):
         first=_decision(value(sentiment_label='neutral',sentiment_score=.05))
         second=_decision(value(sentiment_label='mixed',sentiment_score=-.1))
         self.assertEqual(material_disagreements(first,second),[])
+
+    def test_content_type_difference_at_zero_does_not_trigger_cloud(self):
+        first=_decision(value(content_type='opinion',sentiment_score=0))
+        second=_decision(value(content_type='news',sentiment_score=-.8))
+        self.assertEqual(material_disagreements(first,second),[])
+
+    def test_non_participating_content_counts_as_zero_for_large_gap(self):
+        first=_decision(value(content_type='opinion',sentiment_score=.8))
+        second=_decision(value(content_type='news',sentiment_score=-.8))
+        self.assertEqual(material_disagreements(first,second),['sentiment_score'])
 
     def test_opposite_outlook_is_material(self):
         first=_decision(value(market_outlook='bullish'))

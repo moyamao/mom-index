@@ -31,6 +31,11 @@ class ModelDisagreementWeightTest(unittest.TestCase):
     def test_single_model_is_unchanged(self):
         self.assertFalse(_disagreement_keys({"mini": [row("mini", "a", 1)]}))
 
+    def test_production_verdict_keeps_full_weight(self):
+        final = row("local-consensus-cloud", "a", 0.8)
+        key = (final["post_datetime"].date(), ("gold", "weibo", "a"))
+        self.assertEqual(_weighted_analysis(final, {key}).disagreement_weight, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
