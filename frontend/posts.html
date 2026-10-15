@@ -52,6 +52,25 @@ body {
   padding: 16px;
   margin-bottom: 18px;
 }
+.date-nav {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.date-nav .filter-item { min-width: 170px; }
+.date-nav button {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #475569;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.date-nav button:hover { border-color: #38bdf8; }
+.date-nav button:disabled { opacity: .5; cursor: wait; }
 .filters-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -332,6 +351,12 @@ body {
 </div>
 
 <div class="container">
+  <div class="date-nav" aria-label="帖子发布日期">
+    <button type="button" id="previous-day">前一天</button>
+    <div class="filter-item"><label for="post-date">发布日期（北京时间）</label><input type="date" id="post-date"></div>
+    <button type="button" id="next-day">后一天</button>
+    <button type="button" id="latest-day">最新</button>
+  </div>
   <div class="summary" id="summary">
     <div class="loading">加载中...</div>
   </div>
@@ -401,6 +426,8 @@ const INTENT_NAMES = {
 
 let allItems = [];
 let modelProfiles = [];
+let loadedDate = '';
+let loadSequence = 0;
 
 function applySectorCatalog(items) {
   (items || []).forEach(item => { SECTOR_NAMES[item.code] = item.name || item.code; });
@@ -679,10 +706,30 @@ function rerender() {
   renderPosts(filterItems(allItems));
 }
 
-fetch('/api/post-model-comparison', {cache: 'no-store'})
+function shiftDay(day, offset) {
+  const value = new Date(`${day}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+}
+
+function loadDate(day = '') {
+  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) day = '';
+  const sequence = ++loadSequence;
+  el('summary').innerHTML = '<div class="loading">加载中...</div>';
+  el('posts').innerHTML = '<div class="loading">加载中...</div>';
+  document.querySelectorAll('.date-nav button').forEach(button => { button.disabled = true; });
+  const url = day ? `/api/post-model-comparison?date=${encodeURIComponent(day)}` : '/api/post-model-comparison';
+  fetch(url, {cache: 'no-store'})
   .then(resp => resp.json())
   .then(data => {
+    if (sequence !== loadSequence) return;
     if (data.error) throw new Error(data.error);
+    loadedDate = data.comparison_date || day;
+    el('post-date').value = loadedDate || '';
+    const pageUrl = new URL(window.location.href);
+    if (loadedDate) pageUrl.searchParams.set('date', loadedDate);
+    else pageUrl.searchParams.delete('date');
+    window.history.replaceState(null, '', pageUrl);
     applySectorCatalog(data.sector_catalog);
     allItems = data.items || [];
     modelProfiles = data.profiles || [];
@@ -706,17 +753,27 @@ fetch('/api/post-model-comparison', {cache: 'no-store'})
       + (modelProfiles.length > 1 ? '<option value="both">两个模型均成功</option>' : '')
       + modelProfiles.map(profile => `<option value="${escapeHtml(profile)}">${escapeHtml(profile)} 成功</option>`).join('');
 
-    ['platform-filter', 'sector-filter', 'level-filter', 'intent-filter', 'model-filter'].forEach(id => {
-      el(id).addEventListener('change', rerender);
-    });
-    el('search-input').addEventListener('input', rerender);
-
     rerender();
   })
   .catch(err => {
+    if (sequence !== loadSequence) return;
     el('summary').innerHTML = `<div class="empty">模型帖子接口加载失败: ${escapeHtml(err.message)}</div>`;
     el('posts').innerHTML = '<div class="empty">请确认 web_server.py 正在运行且 MySQL 可访问</div>';
+  })
+  .finally(() => {
+    if (sequence === loadSequence) document.querySelectorAll('.date-nav button').forEach(button => { button.disabled = false; });
   });
+}
+
+el('post-date').addEventListener('change', event => loadDate(event.target.value));
+el('previous-day').addEventListener('click', () => { if (loadedDate) loadDate(shiftDay(loadedDate, -1)); });
+el('next-day').addEventListener('click', () => { if (loadedDate) loadDate(shiftDay(loadedDate, 1)); });
+el('latest-day').addEventListener('click', () => loadDate());
+['platform-filter', 'sector-filter', 'level-filter', 'intent-filter', 'model-filter'].forEach(id => {
+  el(id).addEventListener('change', rerender);
+});
+el('search-input').addEventListener('input', rerender);
+loadDate(new URLSearchParams(window.location.search).get('date') || '');
 </script>
 </body>
 </html>
