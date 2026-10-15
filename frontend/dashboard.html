@@ -637,8 +637,8 @@ function renderCards(data) {
     return;
   }
 
-  document.getElementById('update-time').textContent = 
-    `更新于 ${latest.date}`;
+  document.getElementById('update-time').textContent =
+    `数据日期 ${latest.date}${latest.timestamp ? ` · 模型更新 ${latest.timestamp}` : ''}`;
 
   container.innerHTML = SECTOR_ORDER.filter(key => latest.sectors[key]).map(key => {
     const sector = latest.sectors[key];
@@ -781,7 +781,7 @@ function renderModelSwitcher(data) {
   }
   let active = (profiles.find(item => item.profile === 'local-consensus-cloud')
     || profiles.find(item => item.profile === 'macbook-27b') || profiles[0]).profile;
-  let activeDate = data.model_comparison?.comparison_date || '';
+  let activeDate = '';
   const render = () => {
     switcher.replaceChildren(...profiles.map(item => {
       const button = document.createElement('button');
@@ -792,10 +792,7 @@ function renderModelSwitcher(data) {
       button.onclick = () => {
         active = item.profile;
         const targetSnapshots = data.model_daily_snapshots?.[active] || [];
-        const comparisonDate = data.model_comparison?.comparison_date || '';
-        activeDate = targetSnapshots.some(snapshot => snapshot.date === comparisonDate)
-          ? comparisonDate
-          : targetSnapshots.at(-1)?.date || '';
+        activeDate = targetSnapshots.at(-1)?.date || '';
         render();
       };
       return button;
@@ -829,6 +826,8 @@ function renderModelSwitcher(data) {
       latest: {
         date: comparisonDate || selected.completed_at || '-',
         comparison_date: comparisonDate,
+        timestamp: data.production_summary?.latest_by_profile?.[selected.profile]
+          || selected.completed_at || '',
         sectors: snapshot?.sectors || selected.sectors || {},
       },
       latest_changes: latestChanges,

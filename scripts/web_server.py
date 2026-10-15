@@ -38,18 +38,20 @@ def _apply_latest_model_snapshot(dashboard, comparison, snapshots, model_history
         next((item for item in profiles if item.get("profile") == "macbook-27b"), profiles[0]),
     )
     profile = selected.get("profile") or ""
-    target_date = comparison.get("comparison_date") or ""
     profile_snapshots = snapshots.get(profile) or []
-    snapshot = next(
-        (item for item in profile_snapshots if item.get("date") == target_date),
-        profile_snapshots[-1] if profile_snapshots else None,
-    )
+    # The newest batch may be a historical backlog batch. Dashboard recency must
+    # follow the latest source-post date available for this profile, not that batch.
+    snapshot = profile_snapshots[-1] if profile_snapshots else None
     if not snapshot:
         return
-    target_date = snapshot.get("date") or target_date
+    target_date = snapshot.get("date") or ""
+    latest_completed = (
+        dashboard.get("production_summary", {}).get("latest_by_profile", {}).get(profile)
+        or selected.get("completed_at") or ""
+    )
     dashboard["latest"] = {
         "date": target_date,
-        "timestamp": selected.get("completed_at") or "",
+        "timestamp": latest_completed,
         "profile": profile,
         "sectors": snapshot.get("sectors") or {},
     }
