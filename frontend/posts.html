@@ -351,9 +351,9 @@ body {
 </div>
 
 <div class="container">
-  <div class="date-nav" aria-label="帖子发布日期">
+  <div class="date-nav" aria-label="帖子报告日期">
     <button type="button" id="previous-day">前一天</button>
-    <div class="filter-item"><label for="post-date">发布日期（北京时间）</label><input type="date" id="post-date"></div>
+    <div class="filter-item"><label for="post-date">报告日期（北京时间）</label><input type="date" id="post-date"></div>
     <button type="button" id="next-day">后一天</button>
     <button type="button" id="latest-day">最新</button>
   </div>
@@ -734,7 +734,7 @@ function loadDate(day = '') {
     allItems = data.items || [];
     modelProfiles = data.profiles || [];
     renderSummary(allItems);
-    el('summary').insertAdjacentHTML('afterbegin', `<div class="subtitle" style="margin-bottom:12px">当前结果日期：北京时间 ${escapeHtml(data.comparison_date || '未知')}。展示小模型、27B与生产最终结果；有云端裁决时以生产最终结果为准。</div>`);
+    el('summary').insertAdjacentHTML('afterbegin', `<div class="subtitle" style="margin-bottom:12px">报告日期：北京时间 ${escapeHtml(data.comparison_date || '未知')}。跨午夜完成的采集批次中凌晨发布的帖子归前一报告日，原始发布时间仍如实显示。展示小模型、27B与生产最终结果；有云端裁决时以生产最终结果为准。</div>`);
 
     const platformCounts = allItems.reduce((acc, item) => {
       acc[item.platform] = (acc[item.platform] || 0) + 1;

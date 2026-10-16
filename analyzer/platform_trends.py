@@ -2,7 +2,7 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from post_time import normalize_social_datetime
+from post_time import normalize_social_datetime, report_day
 
 
 def build_platform_trends(rows):
@@ -20,9 +20,11 @@ def build_platform_trends(rows):
                 or row.get('level') in {'垃圾帖', '资讯帖'}):
             continue
         dt = datetime.fromisoformat(stamp)
+        day = report_day(stamp, row.get('source_run_at'))
+        week_start = day - timedelta(days=day.weekday())
         buckets = {'hourly': dt.strftime('%Y-%m-%d %H:00:00'),
-                   'daily': dt.strftime('%Y-%m-%d'),
-                   'weekly': (dt - timedelta(days=dt.weekday())).strftime('%Y-%m-%d')}
+                   'daily': day.isoformat(),
+                   'weekly': week_start.isoformat()}
         for period, bucket in buckets.items():
             groups[(profile, row['sector'], row['platform'], period, bucket)].append(row)
     series = defaultdict(list)
@@ -42,8 +44,8 @@ def build_platform_trends(rows):
                         'greed_ratio': round(sum(float(x['sentiment_score']) > 0 for x in items) / count, 4),
                         'buy_count': sum(x['intent'] == 'buy' for x in items),
                         'sell_count': sum(x['intent'] == 'sell' for x in items)})
-    return {'timezone': 'Asia/Shanghai', 'time_basis': 'post_datetime',
-            'note': '按模型与发布时间分组；缺失时段不补零；change仅比较连续时段；情绪指数范围为 -100 至 +100。',
+    return {'timezone': 'Asia/Shanghai', 'time_basis': 'hourly-post-time,daily-report-day',
+            'note': '小时按发布时间；日/周按报告日；缺失时段不补零；change仅比较连续时段；情绪指数范围为 -100 至 +100。',
             'series': [{'analysis_profile': profile, 'sector': s, 'platform': p, 'period': t, 'records': r}
                        for (profile, s, p, t), r in sorted(series.items())]}
 
@@ -64,7 +66,7 @@ def build_model_sector_history(rows):
                 or row.get('content_type') != 'opinion'
                 or row.get('level') in {'垃圾帖', '资讯帖'}):
             continue
-        day = datetime.fromisoformat(stamp).strftime('%Y-%m-%d')
+        day = report_day(stamp, row.get('source_run_at')).isoformat()
         groups[(profile, row['sector'], day)].append(float(row.get('sentiment_score') or 0))
 
     history = defaultdict(lambda: defaultdict(list))
@@ -86,11 +88,13 @@ def fetch_platform_trends():
         with conn.cursor() as cur:
             cur.execute('''
                 SELECT p.sector, p.platform, p.post_id, p.post_datetime,
+                       r.run_at AS source_run_at,
                        a.level, a.sentiment_score, a.intent, a.analysis_profile,
                        a.analysis_engine, a.content_type
                 FROM mom_index_posts p JOIN mom_index_analysis a
                   ON a.run_id=p.run_id AND a.sector=p.sector
                  AND a.platform=p.platform AND a.post_id=p.post_id
+                JOIN mom_index_runs r ON r.id=p.run_id
                 WHERE p.post_datetime IS NOT NULL
                 ORDER BY p.run_id DESC, p.id DESC, a.id DESC
             ''')
@@ -108,11 +112,13 @@ def fetch_model_sector_history():
         with conn.cursor() as cur:
             cur.execute('''
                 SELECT p.sector, p.platform, p.post_id, p.post_datetime,
+                       r.run_at AS source_run_at,
                        a.level, a.sentiment_score, a.analysis_profile,
                        a.analysis_engine, a.content_type
                 FROM mom_index_posts p JOIN mom_index_analysis a
                   ON a.run_id=p.run_id AND a.sector=p.sector
                  AND a.platform=p.platform AND a.post_id=p.post_id
+                JOIN mom_index_runs r ON r.id=p.run_id
                 WHERE p.post_datetime IS NOT NULL
                 ORDER BY a.id DESC
             ''')

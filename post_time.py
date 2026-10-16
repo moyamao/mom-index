@@ -2,13 +2,28 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 BEIJING = timezone(timedelta(hours=8))
 
 
 def beijing_now() -> datetime:
     return datetime.now(BEIJING).replace(tzinfo=None)
+
+
+def report_day(post_datetime: object, run_at: object = None) -> date | None:
+    """Attribute midnight posts in an overnight collection to its prior report day."""
+    stamp = normalize_social_datetime(post_datetime)
+    if not stamp:
+        return None
+    published = datetime.fromisoformat(stamp)
+    run_stamp = normalize_social_datetime(run_at)
+    if run_stamp:
+        completed = datetime.fromisoformat(run_stamp)
+        if (completed.date() == published.date() and completed.hour < 6
+                and published <= completed):
+            return published.date() - timedelta(days=1)
+    return published.date()
 
 
 def normalize_social_datetime(raw_value: object, now: datetime | None = None) -> str:

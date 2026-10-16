@@ -26,7 +26,7 @@ from typing import Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pymysql
-from post_time import beijing_now, normalize_social_datetime
+from post_time import beijing_now, normalize_social_datetime, report_day
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -1048,6 +1048,7 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
                     p.title,
                     p.post_date,
                     p.post_datetime,
+                    r.run_at AS source_run_at,
                     p.raw_json,
                     a.level,
                     a.newbie_score,
@@ -1067,6 +1068,7 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
                    AND a.sector = p.sector
                    AND a.post_id = p.post_id
                    AND a.platform = p.platform
+                INNER JOIN mom_index_runs r ON r.id = p.run_id
                 WHERE a.analysis_profile = %s
                 ORDER BY p.post_datetime ASC, p.id ASC
                 """,
@@ -1093,7 +1095,7 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
             if not keyword or not sector:
                 continue
 
-            day = _parse_post_day(row.get("post_datetime"), row.get("post_date", ""))
+            day = _row_day(row) or _parse_post_day(row.get("post_datetime"), row.get("post_date", ""))
             if day is None:
                 continue
 
@@ -1252,20 +1254,22 @@ def _comparison_model_batches(cur, target_day: Optional[date] = None):
         next_day = target_day + timedelta(days=1)
         cur.execute(
             f"""
-            SELECT DISTINCT a.batch_id, a.sector, a.platform, a.post_id, a.content_hash
+            SELECT DISTINCT a.batch_id, a.sector, a.platform, a.post_id, a.content_hash,
+                            p.post_datetime, r.run_at AS source_run_at
             FROM mom_index_analysis a
             INNER JOIN mom_index_posts p
               ON p.run_id=a.run_id AND p.sector=a.sector
              AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+            INNER JOIN mom_index_runs r ON r.id=a.run_id
             WHERE a.batch_id IN ({id_placeholders})
               AND a.analysis_engine='llm'
               AND p.post_datetime >= %s AND p.post_datetime < %s
             """,
-            tuple(candidate_ids) + (target_day, next_day),
+            tuple(candidate_ids) + (target_day, next_day + timedelta(days=1)),
         )
         for row in cur.fetchall():
             key = _analysis_key(row)
-            if key:
+            if key and _row_day(row) == target_day:
                 keys_by_batch[row["batch_id"]].add(key)
 
     anchor_keys = keys_by_batch.get(anchor["id"], set())
@@ -1301,7 +1305,9 @@ def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
                       AND p.sector=mom_index_analysis.sector
                       AND p.platform=mom_index_analysis.platform
                       AND mom_index_analysis.post_id <> ''
-                      AND p.post_id=mom_index_analysis.post_id) AS post_datetime
+                      AND p.post_id=mom_index_analysis.post_id) AS post_datetime,
+                  (SELECT r.run_at FROM mom_index_runs r
+                    WHERE r.id=mom_index_analysis.run_id) AS source_run_at
            FROM mom_index_analysis WHERE batch_id=%s ORDER BY id DESC""",
         (batch_id,),
     )
@@ -1310,6 +1316,8 @@ def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
 
 def _row_day(row: Dict) -> Optional[date]:
     value = row.get("post_datetime")
+    if row.get("source_run_at"):
+        return report_day(value, row["source_run_at"])
     if isinstance(value, datetime):
         return value.date()
     if value:
@@ -1518,17 +1526,19 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                 # page date must follow source-post recency, not batch completion time.
                 cur.execute(
                     f"""
-                    SELECT MAX(p.post_datetime) AS latest_post_datetime
+                    SELECT p.post_datetime, r.run_at AS source_run_at
                     FROM mom_index_analysis a
                     INNER JOIN mom_index_posts p
                       ON p.run_id=a.run_id AND p.sector=a.sector
                      AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+                    INNER JOIN mom_index_runs r ON r.id=a.run_id
                     WHERE a.analysis_profile IN ({profile_placeholders})
+                    ORDER BY p.post_datetime DESC, a.id DESC LIMIT 1
                     """,
                     preferred_profiles,
                 )
-                latest = cur.fetchone().get("latest_post_datetime")
-                target_day = latest.date() if isinstance(latest, datetime) else None
+                latest = cur.fetchone()
+                target_day = _row_day(latest) if latest else None
             if target_day is None:
                 return {"profiles": [], "items": []}
             next_day = target_day + timedelta(days=1)
@@ -1543,17 +1553,19 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
                        a.adjudication_source, a.adjudication_json,
                        b.completed_at AS batch_completed_at,
                        p.content, p.url, p.author, p.post_date, p.post_datetime,
+                       r.run_at AS source_run_at,
                        p.raw_json
                 FROM mom_index_analysis a
                 LEFT JOIN mom_index_analysis_batches b ON b.id=a.batch_id
                 LEFT JOIN mom_index_posts p
                   ON p.run_id=a.run_id AND p.sector=a.sector
                  AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+                LEFT JOIN mom_index_runs r ON r.id=a.run_id
                 WHERE a.analysis_profile IN ({profile_placeholders})
                   AND p.post_datetime >= %s AND p.post_datetime < %s
                 ORDER BY COALESCE(p.post_datetime, a.created_at) DESC, a.id DESC
                 """,
-                preferred_profiles + (target_day, next_day),
+                preferred_profiles + (target_day, next_day + timedelta(days=1)),
             )
             rows = cur.fetchall()
 
@@ -1643,11 +1655,13 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
                        a.title, a.newbie_score, a.level, a.sentiment_score,
                        a.sentiment_label, a.emotion_tags_json, a.sentiment_confidence, a.intent,
                        a.intent_strength, a.position_status, a.market_outlook,
-                       a.content_type, a.analysis_engine, p.post_datetime
+                       a.content_type, a.analysis_engine, p.post_datetime,
+                       r.run_at AS source_run_at
                 FROM mom_index_analysis a
                 INNER JOIN mom_index_posts p
                   ON p.run_id=a.run_id AND p.sector=a.sector
                  AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
+                INNER JOIN mom_index_runs r ON r.id=a.run_id
                 WHERE a.analysis_profile NOT IN ('legacy', 'rules')
                   AND a.analysis_engine='llm' AND p.post_datetime >= %s
                 ORDER BY a.id DESC

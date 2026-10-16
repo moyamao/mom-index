@@ -139,9 +139,11 @@ def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
 
 
 def _build_current_snapshot(sector_indices: dict) -> dict:
+    now = beijing_now()
+    report_date = (now - timedelta(days=1)).date() if now.hour < 6 else now.date()
     return {
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "date": report_date.isoformat(),
+        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
         "sectors": sector_indices,
     }
 
