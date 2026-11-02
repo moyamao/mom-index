@@ -1259,7 +1259,7 @@ function renderKeywordHistory(data) {
   }
 
   let activeSector = sectors.includes('storage') ? 'storage' : sectors[0];
-  let activeMode = 'daily';
+  let activeMode = 'weekly';
   let expandedKeywords = false;
 
   function renderSectorTabs() {
@@ -1277,7 +1277,7 @@ function renderKeywordHistory(data) {
         const sector = button.getAttribute('data-sector-tab');
         if (!sector || sector === activeSector) return;
         activeSector = sector;
-        activeMode = 'daily';
+        activeMode = 'weekly';
         expandedKeywords = false;
         renderSectorTabs();
         renderSectorCards(activeSector);
