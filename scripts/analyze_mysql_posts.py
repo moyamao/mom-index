@@ -25,7 +25,7 @@ def main() -> None:
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_ready
     from analyzer.platform_trends import fetch_platform_trends
     from storage.mysql_store import (fetch_model_comparison, fetch_posts_for_analysis,
-                                     fetch_production_summary, persist_standalone_analysis)
+                                     fetch_production_summary, checkpointed_analysis_batch)
 
     if not llm_ready():
         raise SystemExit("27B LLM 未就绪，请检查 config.ini 或 MOM_INDEX_LLM_* / QWEN_BASE_URL")
@@ -41,8 +41,8 @@ def main() -> None:
     if not total:
         print("没有待补的帖子，本次任务正常结束。")
         return
-    results = analyze_all(posts)
-    batch_id = persist_standalone_analysis(results, posts, note=f"MacBook on-demand {args.days}d")
+    with checkpointed_analysis_batch(total, note=f"MacBook on-demand {args.days}d") as (batch_id, save):
+        analyze_all(posts, on_result=save)
     print(f"27B 分析完成并单独入库: batch_id={batch_id}")
     root = os.path.dirname(os.path.dirname(__file__))
     dashboard_path = os.path.join(root, "data", "dashboard_data.json")

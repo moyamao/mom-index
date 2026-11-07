@@ -21,6 +21,7 @@ from .anti_detection import get_anti_detection
 from .weibo_playwright import collect_keyword as collect_keyword_playwright, collect_all as collect_all_playwright
 from runtime_config import ini_get, ini_get_int
 from keyword_config import get_keywords
+from post_identity import fallback_id
 
 SEARCH_KEYWORDS = get_keywords()
 
@@ -117,7 +118,9 @@ def _parse_s_weibo_cards(html_text: str, keyword: str) -> List[Dict]:
 
         posts.append(
             {
-                "id": mid_match.group(1) if mid_match else f"weibo_s_{abs(hash((keyword, title)))}",
+                "id": mid_match.group(1) if mid_match else fallback_id(
+                    "weibo", url=url if re.match(r"https?://weibo\.com/(?:detail/\d+|\d+/\w+)", url) else "",
+                    author=author_match.group(1) if author_match else "", content=content),
                 "title": title,
                 "content": content,
                 "url": url,
@@ -166,7 +169,7 @@ def _parse_m_weibo_cards(items: List[Dict], keyword: str) -> List[Dict]:
             url = f"https://weibo.com/{user.get('id', '')}/{bid}"
         posts.append(
             {
-                "id": mid or f"weibo_m_{abs(hash((keyword, text[:40])))}",
+                "id": mid or fallback_id("weibo", url=url, author=user.get("screen_name"), content=text),
                 "title": text[:100],
                 "content": text,
                 "url": url,
@@ -241,7 +244,7 @@ def _parse_weibo_cn_posts(html_text: str, keyword: str) -> List[Dict]:
         url = f"https://weibo.cn{link_match.group(1)}" if link_match else ""
         posts.append(
             {
-                "id": post_id_match.group(1) if post_id_match else f"weibo_cn_{abs(hash((keyword, text[:40])))}",
+                "id": post_id_match.group(1) if post_id_match else fallback_id("weibo", url=url, content=text),
                 "title": text[:100],
                 "content": text,
                 "url": url,

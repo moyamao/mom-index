@@ -26,6 +26,8 @@ from .llm_sentiment import (
     _analysis_text,
 )
 
+from analyzer.model_privacy import cloud_allowed, request_options
+
 ROOT = Path(__file__).resolve().parents[1]
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
@@ -37,7 +39,7 @@ def _config() -> configparser.ConfigParser:
     return parser
 
 
-def endpoint_config() -> dict[str, dict[str, str]]:
+def endpoint_config(require_cloud=True) -> dict[str, dict[str, str]]:
     parser = _config()
     cloud = parser["llm"] if parser.has_section("llm") else {}
     configs = {
@@ -52,6 +54,8 @@ def endpoint_config() -> dict[str, dict[str, str]]:
         },
     }
     for name, config in configs.items():
+        if name == "cloud" and not require_cloud:
+            continue
         if not config["base_url"]:
             raise RuntimeError(f"{name} base_url未配置")
         if name == "cloud" and not (config["model"] and config["api_key"]):
@@ -104,6 +108,7 @@ def _decision(parsed: dict[str, Any]) -> LlmSentimentDecision:
 
 def call_model(config: dict[str, str], *, title: str, content: str, sector: str,
                platform: str, timeout: float, retries: int = 2) -> dict[str, Any]:
+    options = request_options(platform, config["base_url"])
     text = _analysis_text(title=title, content=content, platform=platform, max_chars=1200)
     headers = {"Content-Type": "application/json"}
     if config.get("api_key"):
@@ -124,7 +129,7 @@ def call_model(config: dict[str, str], *, title: str, content: str, sector: str,
         raw = ""
         try:
             response = requests.post(config["base_url"] + "/chat/completions", headers=headers,
-                                     json=payload, timeout=timeout)
+                                     json=payload, timeout=timeout, **options)
             response.raise_for_status()
             raw = str(response.json().get("choices", [{}])[0].get("message", {}).get("content", ""))
             parsed = _parse_json_payload(raw)
@@ -225,6 +230,9 @@ def adjudicate(*, title: str, content: str, sector: str, platform: str,
     audit["disagreements"] = differences
     if not differences:
         audit.update({"source": "local_agreement_27b", "cloud": None, "requires_review": False})
+        return second, audit
+    if not cloud_allowed(platform):
+        audit.update({"source": "private_local_27b", "cloud": None, "requires_review": True})
         return second, audit
     cloud = call_model(configs["cloud"], title=title, content=content, sector=sector,
                        platform=platform, timeout=timeout)

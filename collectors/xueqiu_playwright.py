@@ -17,6 +17,7 @@ from urllib.parse import quote
 from .anti_detection import get_anti_detection
 from runtime_config import ini_get_bool, ini_get_float, ini_get_int
 from post_time import normalize_social_datetime
+from post_identity import fallback_id
 
 try:
     from playwright.async_api import async_playwright
@@ -615,7 +616,7 @@ async def _extract_posts(page, keyword: str, limit: int) -> List[Dict]:
             continue
         posts.append(
             {
-                "id": post_id or f"xueqiu_pw_{abs(hash((keyword, title)))}",
+                "id": post_id or fallback_id("xueqiu", url=href, author=author, title=clean_title, content=clean_content),
                 "title": clean_title,
                 "content": clean_content,
                 "url": href,

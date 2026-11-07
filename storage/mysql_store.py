@@ -18,12 +18,13 @@ import configparser
 import json
 import os
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 import hashlib
 import re
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from post_identity import canonical_url as _canonical_url
 
 import pymysql
 from post_time import beijing_now, normalize_social_datetime, report_day
@@ -276,7 +277,7 @@ def _insert_run(cur, dashboard: Dict, sector_indices: Dict, total_posts: int) ->
         VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (
-            beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
+            dashboard.get("latest", {}).get("timestamp") or beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
             total_posts,
             len(sector_indices),
             "mom-index pipeline",
@@ -316,22 +317,6 @@ def _content_hash(post: Dict) -> str:
 
 def _normalize_identity_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().lower()
-
-
-def _canonical_url(value: object) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    try:
-        parts = urlsplit(raw)
-    except ValueError:
-        return raw
-    ignored = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "spm", "from"}
-    query = urlencode(
-        sorted((key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True) if key.lower() not in ignored)
-    )
-    path = parts.path.rstrip("/") or "/"
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
 def post_content_key(post: Dict) -> str:
@@ -421,7 +406,7 @@ def _upsert_post_catalog(cur, run_id: int, all_posts: Dict[str, List[Dict]]) -> 
 def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_posts: Dict[str, List[Dict]], batch_id: int) -> Iterable[tuple]:
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
     post_lookup = {
-        (sector, str(post.get("id", ""))): post
+        (sector, post.get("platform"), str(post.get("id", ""))): post
         for sector, posts in all_posts.items() for post in posts
     }
     for sector, results in analysis_results.items():
@@ -455,11 +440,11 @@ def _iter_analysis_rows(run_id: int, analysis_results: Dict[str, List], all_post
                 llm_model_name(),
                 llm_prompt_version(),
                 getattr(item, "sentiment_source", "rules") or "rules",
-                _content_hash(post_lookup.get((sector, str(item.post_id)), {})),
+                _content_hash(post_lookup.get((sector, item.platform, str(item.post_id)), {})),
             )
 
 
-def _insert_analysis_batch(cur, analysis_results: Dict[str, List]) -> int:
+def _insert_analysis_batch(cur, analysis_results: Dict[str, List], note: str) -> int:
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
     requested = sum(len(items) for items in analysis_results.values())
     llm_posts = sum(item.sentiment_source == "llm" for items in analysis_results.values() for item in items)
@@ -473,7 +458,7 @@ def _insert_analysis_batch(cur, analysis_results: Dict[str, List]) -> int:
         """,
         (llm_profile(), llm_model_name(), llm_prompt_version(),
          os.environ.get("MOM_INDEX_RUNTIME_ROLE", "collector"), beijing_now(),
-         requested, requested, llm_posts, failed_posts, "pipeline analysis"),
+         requested, requested, llm_posts, failed_posts, note),
     )
     return int(cur.lastrowid)
 
@@ -483,6 +468,7 @@ def persist_pipeline_run(
     analysis_results: Dict[str, List],
     sector_indices: Dict,
     dashboard: Dict,
+    note: str = "pipeline analysis",
 ) -> Optional[int]:
     if not mysql_enabled():
         return None
@@ -492,7 +478,7 @@ def persist_pipeline_run(
         with conn.cursor() as cur:
             _ensure_tables(cur)
             run_id = _insert_run(cur, dashboard, sector_indices, sum(len(v) for v in all_posts.values()))
-            batch_id = _insert_analysis_batch(cur, analysis_results)
+            batch_id = _insert_analysis_batch(cur, analysis_results, note)
 
             post_rows = list(_iter_post_rows(run_id, all_posts))
             if post_rows:
@@ -862,74 +848,113 @@ def fetch_latest_collection_today() -> Optional[Dict]:
         conn.close()
 
 
-def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[str, List[Dict]], note: str = "on-demand analysis") -> int:
-    """Persist an analysis-only batch while retaining each post's source run id."""
+_STANDALONE_INSERT = """INSERT INTO mom_index_analysis
+    (run_id,sector,post_id,title,platform,newbie_score,newbie_confidence,
+     level,sentiment_score,sentiment_label,emotion_tags_json,sentiment_confidence,intent,intent_strength,
+     position_status,market_outlook,content_type,key_signals_json,reasoning,
+     matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
+     prompt_version,analysis_engine,content_hash,adjudication_source,adjudication_json)
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+
+
+def _standalone_row(sector, item, post, batch_id):
+    from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
+    return (
+        int(post.get("run_id") or 0), sector, item.post_id, item.title, item.platform,
+        float(item.newbie_score), item.newbie_confidence, item.level,
+        float(item.sentiment_score),
+        getattr(item, "sentiment_label", "neutral") or "neutral",
+        json.dumps(getattr(item, "emotion_tags", []) or [], ensure_ascii=False),
+        float(getattr(item, "sentiment_confidence", 0) or 0),
+        item.intent, float(item.intent_strength),
+        getattr(item, "position_status", "unknown") or "unknown",
+        getattr(item, "market_outlook", "unknown") or "unknown",
+        getattr(item, "content_type", "opinion") or "opinion",
+        json.dumps(item.key_signals, ensure_ascii=False), item.reasoning,
+        json.dumps(item.matched_newbie, ensure_ascii=False),
+        json.dumps(item.matched_pro, ensure_ascii=False), batch_id, llm_profile(),
+        llm_model_name(), llm_prompt_version(), item.sentiment_source,
+        _content_hash(post),
+        getattr(item, "adjudication_source", "") or "",
+        getattr(item, "adjudication_json", "") or "",
+    )
+
+
+def _open_standalone_batch(cur, requested, note):
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
     from runtime_config import ini_get
+    cur.execute(
+        """INSERT INTO mom_index_analysis_batches
+           (profile, model_name, prompt_version, machine_role, started_at,
+            requested_posts, analyzed_posts, llm_posts, failed_posts, status, note)
+           VALUES (%s,%s,%s,%s,%s,%s,0,0,0,'running',%s)""",
+        (llm_profile(), llm_model_name(), llm_prompt_version(),
+         os.environ.get("MOM_INDEX_RUNTIME_ROLE") or ini_get("runtime", "role", "analyst"),
+         beijing_now(), requested, note))
+    return int(cur.lastrowid)
+
+
+def persist_standalone_analysis(analysis_results: Dict[str, List], posts: Dict[str, List[Dict]], note: str = "on-demand analysis") -> int:
     conn = _connect()
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            requested = sum(len(items) for items in analysis_results.values())
-            llm_posts = sum(item.sentiment_source == "llm" for items in analysis_results.values() for item in items)
-            failed_posts = sum(bool(getattr(item, "llm_error", "")) for items in analysis_results.values() for item in items)
-            cur.execute(
-                """INSERT INTO mom_index_analysis_batches
-                   (profile, model_name, prompt_version, machine_role, started_at,
-                    requested_posts, analyzed_posts, llm_posts, failed_posts, status, note)
-                   VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,'running',%s)""",
-                (llm_profile(), llm_model_name(), llm_prompt_version(),
-                 os.environ.get("MOM_INDEX_RUNTIME_ROLE", "").strip()
-                 or ini_get("runtime", "role", "analyst"), beijing_now(), requested,
-                 llm_posts, failed_posts, note),
-            )
-            batch_id = int(cur.lastrowid)
-            post_lookup = {
-                (sector, str(post.get("id", ""))): post
-                for sector, items in posts.items() for post in items
-            }
+            requested = sum(map(len, analysis_results.values()))
+            batch_id = _open_standalone_batch(cur, requested, note)
             rows = []
+            llm = failed = 0
             for sector, results in analysis_results.items():
+                lookup = {(p.get("platform"), str(p.get("id", ""))): p for p in posts[sector]}
                 for item in results:
-                    post = post_lookup.get((sector, str(item.post_id)), {})
-                    rows.append((
-                        int(post.get("run_id") or 0), sector, item.post_id, item.title, item.platform,
-                        float(item.newbie_score), item.newbie_confidence, item.level,
-                        float(item.sentiment_score),
-                        getattr(item, "sentiment_label", "neutral") or "neutral",
-                        json.dumps(getattr(item, "emotion_tags", []) or [], ensure_ascii=False),
-                        float(getattr(item, "sentiment_confidence", 0) or 0),
-                        item.intent, float(item.intent_strength),
-                        getattr(item, "position_status", "unknown") or "unknown",
-                        getattr(item, "market_outlook", "unknown") or "unknown",
-                        getattr(item, "content_type", "opinion") or "opinion",
-                        json.dumps(item.key_signals, ensure_ascii=False), item.reasoning,
-                        json.dumps(item.matched_newbie, ensure_ascii=False),
-                        json.dumps(item.matched_pro, ensure_ascii=False), batch_id, llm_profile(),
-                        llm_model_name(), llm_prompt_version(), item.sentiment_source,
-                        _content_hash(post),
-                        getattr(item, "adjudication_source", "") or "",
-                        getattr(item, "adjudication_json", "") or "",
-                    ))
+                    post = lookup.get((item.platform, str(item.post_id)))
+                    if post is None:
+                        raise ValueError(f"找不到分析的源帖: {sector}/{item.platform}/{item.post_id}")
+                    rows.append(_standalone_row(sector, item, post, batch_id))
+                    llm += item.sentiment_source == "llm"
+                    failed += bool(getattr(item, "llm_error", ""))
             if rows:
-                cur.executemany(
-                    """INSERT INTO mom_index_analysis
-                       (run_id,sector,post_id,title,platform,newbie_score,newbie_confidence,
-                        level,sentiment_score,sentiment_label,emotion_tags_json,sentiment_confidence,intent,intent_strength,
-                        position_status,market_outlook,content_type,key_signals_json,reasoning,
-                        matched_newbie_json,matched_pro_json,batch_id,analysis_profile,model_name,
-                        prompt_version,analysis_engine,content_hash,adjudication_source,adjudication_json)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    rows,
-                )
-            cur.execute(
-                """UPDATE mom_index_analysis_batches SET status='completed', completed_at=%s,
-                   analyzed_posts=%s WHERE id=%s""",
-                (beijing_now(), len(rows), batch_id),
-            )
+                cur.executemany(_STANDALONE_INSERT, rows)
+            cur.execute("""UPDATE mom_index_analysis_batches SET status='completed',completed_at=%s,
+                           analyzed_posts=%s,llm_posts=%s,failed_posts=%s WHERE id=%s""",
+                        (beijing_now(), len(rows), llm, failed, batch_id))
         conn.commit()
         return batch_id
-    except Exception:
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def checkpointed_analysis_batch(total, note):
+    """Keep one logical batch, but commit each judgement before the next LLM call."""
+    conn = _connect()
+    saved = 0
+    try:
+        with conn.cursor() as cur:
+            _ensure_tables(cur)
+            batch_id = _open_standalone_batch(cur, total, note)
+        conn.commit()
+
+        def save(post, item):
+            nonlocal saved
+            last = saved + 1 == total
+            conn.ping(reconnect=True)
+            with conn.cursor() as cur:
+                cur.execute(_STANDALONE_INSERT, _standalone_row(item.sector, item, post, batch_id))
+                cur.execute("""UPDATE mom_index_analysis_batches SET status=%s, completed_at=%s,
+                               analyzed_posts=analyzed_posts+1,llm_posts=llm_posts+%s,
+                               failed_posts=failed_posts+%s WHERE id=%s""",
+                            ("completed" if last else "partial", beijing_now() if last else None,
+                             int(item.sentiment_source == "llm"), int(bool(item.llm_error)), batch_id))
+            conn.commit()
+            saved += 1
+
+        yield batch_id, save
+        if saved != total:
+            raise RuntimeError(f"批次 {batch_id} 仅保存 {saved}/{total} 条")
+    except BaseException:
         conn.rollback()
         raise
     finally:
@@ -973,23 +998,29 @@ def _parse_post_day(post_datetime, post_date: str) -> Optional[date]:
 def _to_analysis_like(row: Dict) -> SimpleNamespace:
     score = float(row.get("sentiment_score") or 0)
     label = row.get("sentiment_label") or "neutral"
-    if label == "neutral" and score:
+    legacy = row.get("analysis_profile") in (None, "", "legacy")
+    if legacy and label == "neutral" and score:
         label = "greed" if score > 0 else "fear"
     engine = row.get("analysis_engine") or "rules"
     # content_type is the authoritative LLM verdict. level is a legacy field and
     # may still contain the pre-LLM rule classification (for example 资讯帖).
-    content_type = row.get("content_type") or ("news" if row.get("level") == "资讯帖" else "opinion")
+    level = row.get("level") or ""
+    old_type = {"资讯帖": "news", "垃圾帖": "spam"}.get(level)
+    content_type = (old_type if legacy else None) or row.get("content_type") or old_type or "opinion"
+    if old_type and old_type != content_type:
+        level = ""
     return SimpleNamespace(
         post_id=row.get("post_id", "") or "",
         title=row.get("title", "") or "",
         platform=row.get("platform", "") or "unknown",
         newbie_score=float(row.get("newbie_score") or 0),
-        level=row.get("level", "") or "",
+        level=level,
         reasoning="",
         sentiment_score=score,
         sentiment_label=label,
         emotion_tags=_parse_json_list(row.get("emotion_tags_json")),
-        sentiment_confidence=float(row.get("sentiment_confidence") or 1),
+        sentiment_confidence=(1.0 if row.get("sentiment_confidence") is None or
+                             (legacy and not row.get("sentiment_confidence")) else float(row["sentiment_confidence"])),
         sentiment_source="llm" if engine == "llm" else engine,
         intent=row.get("intent", "") or "neutral",
         intent_strength=float(row.get("intent_strength") or 0),
@@ -1051,6 +1082,7 @@ def fetch_keyword_history(profile: Optional[str] = None) -> Dict[str, Dict]:
                     r.run_at AS source_run_at,
                     p.raw_json,
                     a.level,
+                    a.analysis_profile,
                     a.newbie_score,
                     a.sentiment_score,
                     a.sentiment_label,
@@ -1294,7 +1326,7 @@ def _comparison_model_batches(cur, target_day: Optional[date] = None):
 
 def _batch_analysis_rows(cur, batch_id: int) -> List[Dict]:
     cur.execute(
-        """SELECT run_id, sector, post_id, title, platform, newbie_score,
+        """SELECT run_id, sector, post_id, title, platform, analysis_profile, newbie_score,
                   newbie_confidence, level, sentiment_score, sentiment_label, emotion_tags_json,
                   sentiment_confidence, intent, intent_strength, position_status,
                   market_outlook, content_type, analysis_engine, reasoning,
@@ -1640,7 +1672,7 @@ def fetch_post_model_comparison(target_day: Optional[date] = None) -> Dict:
         conn.close()
 
 
-def fetch_model_daily_snapshots(days: int = 30) -> Dict:
+def fetch_model_daily_snapshots(days: Optional[int] = 30) -> Dict:
     """Return complete daily sector cards per model profile for history browsing."""
     if not mysql_enabled():
         return {}
@@ -1648,7 +1680,7 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
     try:
         with conn.cursor() as cur:
             _ensure_tables(cur)
-            start_day = beijing_now().date() - timedelta(days=max(1, days) - 1)
+            start_day = beijing_now().date() - timedelta(days=max(1, days) - 1) if days is not None else None
             cur.execute(
                 """
                 SELECT a.id, a.analysis_profile, a.sector, a.platform, a.post_id,
@@ -1663,50 +1695,55 @@ def fetch_model_daily_snapshots(days: int = 30) -> Dict:
                  AND p.platform=a.platform AND a.post_id <> '' AND p.post_id=a.post_id
                 INNER JOIN mom_index_runs r ON r.id=a.run_id
                 WHERE a.analysis_profile NOT IN ('legacy', 'rules')
-                  AND a.analysis_engine='llm' AND p.post_datetime >= %s
+                  AND a.analysis_engine='llm' AND p.post_datetime IS NOT NULL
+                """ + (" AND p.post_datetime >= %s " if start_day else "") + """
                 ORDER BY a.id DESC
                 """,
-                (start_day,),
+                (start_day,) if start_day else (),
             )
             rows = cur.fetchall()
 
-        rows_by_profile = defaultdict(list)
-        for row in rows:
-            rows_by_profile[row["analysis_profile"]].append(row)
-        disagreement_keys = _disagreement_keys(rows_by_profile)
-        seen = set()
-        grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-        for row in rows:
-            day = _row_day(row)
-            if day is None:
-                continue
-            key = (row["analysis_profile"], day, row["sector"], row["platform"], row["post_id"])
-            if key in seen:
-                continue
-            seen.add(key)
-            grouped[row["analysis_profile"]][day.isoformat()][row["sector"]].append(
-                _weighted_analysis(row, disagreement_keys)
-            )
-
-        from analyzer.index_calculator import compute_sector_index
-        result = {}
-        for profile, dates in grouped.items():
-            snapshots = []
-            for day_key, sectors in sorted(dates.items()):
-                sector_results = {}
-                for sector in _ordered_sectors(sectors):
-                    items = sectors.get(sector)
-                    if not items:
-                        continue
-                    value = compute_sector_index(items)
-                    value.setdefault("details", {})["analysis_window"] = {
-                        "mode": "day",
-                        "label": f"北京时间 {day_key}",
-                        "sample_count": len(items),
-                    }
-                    sector_results[sector] = value
-                snapshots.append({"date": day_key, "sectors": sector_results})
-            result[profile] = snapshots
-        return result
+        return build_model_daily_snapshots(rows)
     finally:
         conn.close()
+
+
+def build_model_daily_snapshots(rows):
+    rows_by_profile = defaultdict(list)
+    unique = {}
+    for row in rows:
+        if row.get("analysis_engine") != "llm" or not row.get("post_id"):
+            continue
+        day = _row_day(row)
+        if day is None:
+            continue
+        key = (row["analysis_profile"], day, row["sector"], row["platform"], row["post_id"])
+        if key in unique:
+            continue
+        unique[key] = row
+        rows_by_profile[row["analysis_profile"]].append(row)
+    disagreement_keys = _disagreement_keys(rows_by_profile)
+    grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for (profile, day, sector, _, _), row in unique.items():
+        grouped[profile][day.isoformat()][sector].append(_weighted_analysis(row, disagreement_keys))
+
+    from analyzer.index_calculator import compute_sector_index
+    result = {}
+    for profile, dates in grouped.items():
+        snapshots = []
+        for day_key, sectors in sorted(dates.items()):
+            sector_results = {}
+            for sector in _ordered_sectors(sectors):
+                items = sectors.get(sector)
+                if not items:
+                    continue
+                value = compute_sector_index(items)
+                value.setdefault("details", {})["analysis_window"] = {
+                    "mode": "day",
+                    "label": f"北京时间 {day_key}",
+                    "sample_count": len(items),
+                }
+                sector_results[sector] = value
+            snapshots.append({"date": day_key, "sectors": sector_results})
+        result[profile] = snapshots
+    return result

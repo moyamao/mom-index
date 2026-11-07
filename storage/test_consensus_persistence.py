@@ -33,7 +33,7 @@ class ConsensusPersistenceTest(unittest.TestCase):
             position_status='none',market_outlook='bullish',content_type='opinion',key_signals=[],
             reasoning='r',matched_newbie=[],matched_pro=[],sentiment_source='llm',llm_error='',
             adjudication_source='cloud_adjudication',adjudication_json=audit)
-        posts={'gold':[{'id':'p','run_id':1,'title':'t','content':'c'}]}
+        posts={'gold':[{'id':'p','platform':'x','run_id':1,'title':'t','content':'c'}]}
         with patch.object(mysql_store,'_connect',return_value=conn), patch.object(mysql_store,'_ensure_tables'):
             with patch.dict(os.environ,{'MOM_INDEX_LLM_PROFILE':'local-consensus-cloud',
                 'MOM_INDEX_LLM_MODEL':'14B+27B+cloud-adjudication','MOM_INDEX_LLM_PROMPT_VERSION':'sentiment-consensus-v1'}):

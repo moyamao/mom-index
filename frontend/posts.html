@@ -569,6 +569,12 @@ const DISAGREEMENT_NAMES = {
   missing_valid_27b: '27B未能有效判定',
 };
 
+const VERDICT_SOURCES = {
+  cloud_adjudication: '云端裁决', cloud_after_27b_failure: '27B失败·云端接管',
+  stored_agreement_27b: '采用27B',
+  private_local_27b: '仅本地27B · 待复核', private_local_14b: '仅本地14B · 待复核',
+};
+
 function renderAnalysis(analysis) {
   const isLlm = analysis.analysis_engine === 'llm';
   const isNews = analysis.content_type === 'news';
@@ -578,7 +584,7 @@ function renderAnalysis(analysis) {
       <div class="model-result-line">
         <span class="model-result-name">${escapeHtml(analysis.profile === 'local-consensus-cloud' ? '生产最终结果' : analysis.profile)}</span>
         <span class="badge ${isLlm ? 'level' : 'intent-neutral'}">${isLlm ? 'LLM' : '规则回退'}</span>
-        ${analysis.adjudication_source ? `<span class="badge sector">${escapeHtml(analysis.adjudication_source === 'cloud_adjudication' ? '云端裁决' : analysis.adjudication_source === 'cloud_after_27b_failure' ? '27B失败·云端接管' : analysis.adjudication_source === 'stored_agreement_27b' ? '采用27B' : analysis.adjudication_source)}</span>` : ''}
+        ${analysis.adjudication_source ? `<span class="badge sector">${escapeHtml(VERDICT_SOURCES[analysis.adjudication_source] || analysis.adjudication_source)}</span>` : ''}
         <span class="model-value">类别 <strong>${isNews ? '资讯' : analysis.content_type === 'spam' ? '无效' : '观点'}</strong></span>
         <span class="model-value">情绪 <strong>${isNews ? '不参与' : `${score >= 0 ? '+' : ''}${score}`}</strong></span>
         <span class="model-value">具体情绪 <strong>${isNews ? '不参与' : (analysis.emotion_tags || []).map(tag => EMOTION_TAG_NAMES[tag] || tag).join('、') || '未识别'}</strong></span>
@@ -656,9 +662,7 @@ function renderPosts(items) {
       : scoredAnalyses.length && !hasDisagreement
       ? Math.round(scoredAnalyses.reduce((sum, a) => sum + Number(a.sentiment_score || 0), 0) / scoredAnalyses.length * 100)
       : null;
-    const sourceLabel = finalAnalysis?.adjudication_source === 'cloud_adjudication' ? '云端裁决'
-      : finalAnalysis?.adjudication_source === 'cloud_after_27b_failure' ? '27B失败·云端接管'
-      : finalAnalysis?.adjudication_source === 'stored_agreement_27b' ? '采用27B' : '生产最终结果';
+    const sourceLabel = VERDICT_SOURCES[finalAnalysis?.adjudication_source] || '生产最终结果';
     const averageLabel = finalAnalysis ? sourceLabel : hasDisagreement ? '模型分歧 · 等待裁决' : averageSentiment == null ? '仅计数' : averageSentiment >= 15 ? '贪婪' : averageSentiment <= -15 ? '恐慌' : '中性';
     return `
     <article class="post-card">

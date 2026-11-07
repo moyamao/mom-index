@@ -1,6 +1,11 @@
+import os
+import subprocess
+import sys
 import unittest
 from datetime import datetime
 
+from collectors.weibo_collector import _parse_m_weibo_cards
+from post_identity import fallback_id
 from storage.mysql_store import _upsert_post_catalog, post_content_key
 
 
@@ -13,6 +18,17 @@ class RecordingCursor:
 
 
 class PostContentKeyTest(unittest.TestCase):
+    def test_missing_native_id_survives_keyword_and_process_changes(self):
+        cards = [{"mblog": {"text": "an original post", "user": {"screen_name": "Alice"}}}]
+        first = _parse_m_weibo_cards(cards, "黄金")[0]["id"]
+        self.assertEqual(first, _parse_m_weibo_cards(cards, "金价")[0]["id"])
+        self.assertNotEqual(first, fallback_id("weibo", author="Bob", content="an original post"))
+        command = [sys.executable, "-c", "from post_identity import fallback_id; "
+                   "print(fallback_id('weibo', author='Alice', content='an original post'))"]
+        for seed in ("42", "123"):
+            self.assertEqual(first, subprocess.check_output(
+                command, env=dict(os.environ, PYTHONHASHSEED=seed), text=True).strip())
+
     def test_platform_and_post_id_are_primary_identity(self):
         first = {"platform": "xueqiu", "id": "123", "content": "摘要"}
         enriched = {"platform": "xueqiu", "id": "123", "content": "完整正文"}

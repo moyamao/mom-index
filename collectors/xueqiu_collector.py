@@ -27,6 +27,7 @@ from .anti_detection import get_anti_detection
 from .xueqiu_playwright import collect_keyword as collect_keyword_playwright, collect_all as collect_all_playwright
 from runtime_config import ini_get, ini_get_int
 from keyword_config import get_keywords
+from post_identity import fallback_id
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -220,7 +221,7 @@ def _parse_items(payload: Dict, keyword: str) -> List[Dict]:
 
         posts.append(
             {
-                "id": str(post_id) or f"xueqiu_{abs(hash((keyword, title)))}",
+                "id": str(post_id) or fallback_id("xueqiu", url=url, author=author, title=title, content=text),
                 "title": title,
                 "content": text,
                 "url": url,

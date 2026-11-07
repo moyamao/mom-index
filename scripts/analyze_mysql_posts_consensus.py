@@ -30,15 +30,12 @@ def main() -> None:
     os.environ.setdefault("MOM_INDEX_LLM_PROMPT_VERSION", "sentiment-consensus-v1")
 
     from analyzer.llm_analyzer import analyze_post, apply_llm_decision
+    from analyzer.model_privacy import cloud_allowed
     from analyzer.llm_consensus import adjudicate, endpoint_config, preflight
     from analyzer.platform_trends import fetch_platform_trends
     from storage.mysql_store import (fetch_model_comparison, fetch_posts_for_analysis,
         fetch_reference_analyses, persist_standalone_analysis, reference_analysis_key)
 
-    configs = endpoint_config()
-    preflight(configs)
-    print(f"本机27B已就绪：{configs['local_27b']['model']}；14B从MySQL历史结果读取")
-    print(f"云端裁决模型：{configs['cloud']['model']}")
     profile = os.environ["MOM_INDEX_LLM_PROFILE"]
     posts = fetch_posts_for_analysis(
         args.days, args.limit, analysis_profile="" if args.reanalyze_all else profile,
@@ -49,6 +46,9 @@ def main() -> None:
         print("没有待补的帖子，本次任务正常结束。")
         return
     references = fetch_reference_analyses(posts, args.reference_profile)
+    configs = endpoint_config(require_cloud=any(cloud_allowed(post.get("platform"))
+                              for items in posts.values() for post in items))
+    preflight(configs)
     print(f"14B历史配置={args.reference_profile}；匹配到{len(references)}/{total}条")
 
     results = {}

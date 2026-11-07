@@ -9,6 +9,7 @@ import json
 import re
 import time
 
+from .model_privacy import PrivateEndpointError
 from .llm_sentiment import (
     analyze_sentiment_with_llm,
     llm_max_posts_per_run,
@@ -543,8 +544,13 @@ def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
             platform=result.platform,
             current_result=result,
         )
+    except PrivateEndpointError as exc:
+        result.llm_error = str(exc)
+        result.sentiment_source = "privacy_blocked"
+        return
     except Exception as exc:
         result.llm_error = str(exc)[:180]
+        result.sentiment_source = "llm_failed"
         return
 
     if not llm_decision:
@@ -605,11 +611,11 @@ def apply_llm_decision(result: AnalysisResult, llm_decision) -> None:
         result.newbie_confidence = "low"
     maturity = llm_decision.investor_maturity
     maturity_confidence = llm_decision.maturity_confidence
-    if result.content_type == "news":
+    if result.content_type in {"news", "spam"}:
         pass
     elif maturity == "not_applicable" and maturity_confidence >= 0.65:
         result.newbie_score = 0
-        result.level = "资讯帖"
+        result.level = "未判定"
         result.newbie_confidence = "high"
     elif maturity in {"novice", "general", "professional"} and maturity_confidence >= 0.65:
         target_score = {"novice": 65.0, "general": 25.0, "professional": 5.0}[maturity]
@@ -645,7 +651,7 @@ def analyze_sector(posts: List[Dict], sector: str, sort_results: bool = True) ->
     return results
 
 
-def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisResult]]:
+def analyze_all(sector_data: Dict[str, List[Dict]], on_result=None) -> Dict[str, List[AnalysisResult]]:
     """分析所有板块"""
     all_results = {}
     for sector, posts in sector_data.items():
@@ -654,7 +660,10 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
         all_results[sector] = analyze_sector(posts, sector, sort_results=False)
 
     if not llm_ready():
-        for results in all_results.values():
+        for sector, results in all_results.items():
+            if on_result:
+                for post, result in zip(sector_data[sector], results):
+                    on_result(post, result)
             results.sort(key=lambda r: r.newbie_score, reverse=True)
         return all_results
 
@@ -684,6 +693,8 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
         elif result.llm_error:
             failed += 1
         _refresh_key_signals(result)
+        if on_result:
+            on_result(post, result)
         if interval and index < len(selected) - 1:
             time.sleep(interval)
 
@@ -693,6 +704,11 @@ def analyze_all(sector_data: Dict[str, List[Dict]]) -> Dict[str, List[AnalysisRe
         failed_results = [result for _, _, _, result in selected if result.llm_error]
         for result in failed_results[:3]:
             print(f"    ⚠️ {result.sector}/{result.post_id}: {result.llm_error}")
-    for results in all_results.values():
+    selected_ids = {id(item[3]) for item in selected}
+    for sector, results in all_results.items():
+        if on_result:
+            for post, result in zip(sector_data[sector], results):
+                if id(result) not in selected_ids:
+                    on_result(post, result)
         results.sort(key=lambda r: r.newbie_score, reverse=True)
     return all_results

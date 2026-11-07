@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 import requests
 
 from runtime_config import ini_get, ini_get_bool, ini_get_float, ini_get_int, ini_get_optional
+from analyzer.model_privacy import request_options
 
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -191,6 +192,8 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
             source="insufficient",
         )
 
+    base_url = _base_url()
+    options = request_options(platform, base_url)
     headers = {"Content-Type": "application/json"}
     if _api_key():
         headers["Authorization"] = f"Bearer {_api_key()}"
@@ -220,10 +223,11 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         }
         try:
             resp = requests.post(
-                f"{_base_url()}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=_timeout_seconds(),
+                **options,
             )
             resp.raise_for_status()
             data = resp.json()

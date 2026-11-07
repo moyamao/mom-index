@@ -30,6 +30,7 @@ def main() -> None:
     os.environ.setdefault("MOM_INDEX_RUNTIME_ROLE", "analyst")
 
     from analyzer.llm_analyzer import analyze_post, apply_llm_decision
+    from analyzer.model_privacy import cloud_allowed
     from analyzer.llm_consensus import (_decision, call_model, decision_from_stored,
                                         endpoint_config, material_disagreements)
     from storage.mysql_store import (fetch_posts_for_analysis, fetch_reference_analyses,
@@ -47,7 +48,7 @@ def main() -> None:
     refs14 = fetch_reference_analyses(posts, args.profile_14b)
     refs27 = fetch_reference_analyses(posts, args.profile_27b)
     failed27 = fetch_reference_analyses(posts, args.profile_27b, ("llm_failed",))
-    configs = endpoint_config()
+    configs = None
     total = sum(len(items) for items in posts.values())
     paired = cloud_count = agreement_count = 0
     results = {}
@@ -76,14 +77,19 @@ def main() -> None:
             paired += 1
             decision14 = decision_from_stored(row14)
             decision27 = decision_from_stored(row27) if row27 else None
-            differences = (["missing_valid_27b"] if row27_failure
+            differences = (["missing_valid_27b"] if not row27
                            else material_disagreements(decision14, decision27))
             if not differences and decision27 is not None:
                 agreement_count += 1
                 cloud = None
                 final = decision27
                 source = "stored_agreement_27b"
+            elif not cloud_allowed(post.get("platform")):
+                cloud = None
+                final = decision27 or decision14
+                source = "private_local_27b" if decision27 else "private_local_14b"
             else:
+                configs = configs or endpoint_config()
                 cloud = call_model(
                     configs["cloud"], title=post.get("title", ""), content=post.get("content", ""),
                     sector=sector, platform=post.get("platform", ""), timeout=args.timeout,
@@ -91,7 +97,7 @@ def main() -> None:
                 fallback = decision27 or decision14
                 final = fallback if not cloud["ok"] else _decision(cloud["decision"])
                 if cloud["ok"]:
-                    source = "cloud_after_27b_failure" if row27_failure else "cloud_adjudication"
+                    source = "cloud_after_27b_failure" if not row27 else "cloud_adjudication"
                 else:
                     source = "cloud_failure_fallback_27b" if decision27 else "cloud_failure_fallback_14b"
                 cloud_count += 1
@@ -108,7 +114,7 @@ def main() -> None:
                                if row27 else None),
                 "failed_27b": ({"id": row27_failure["id"], "batch_id": row27_failure["batch_id"]}
                                if row27_failure else None),
-                "cloud": cloud, "requires_review": bool(cloud is not None and not cloud["ok"]),
+                "cloud": cloud, "requires_review": source.startswith("private_local_") or bool(cloud is not None and not cloud["ok"]),
             }, ensure_ascii=False)
             if cloud is not None and not cloud["ok"]:
                 result.llm_error = "云端裁决失败，采用27B结果，需复核"

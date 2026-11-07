@@ -18,6 +18,7 @@ from notifications import send_dingtalk_text, xhs_verification_message
 from runtime_config import ini_get_bool, ini_get_float, ini_get_int
 from keyword_config import get_keywords
 from post_time import normalize_social_datetime
+from post_identity import fallback_id
 
 try:
     from playwright.async_api import async_playwright
@@ -267,7 +268,7 @@ def _extract_posts_from_html(html: str, keyword: str, limit: int) -> List[Dict]:
         note_id = note_ids[i] if i < len(note_ids) else ""
         posts.append(
             {
-                "id": note_id or f"xhs_{abs(hash(title))}",
+                "id": note_id or fallback_id("xiaohongshu", title=title),
                 "title": title[:180],
                 "url": f"https://www.xiaohongshu.com/explore/{note_id}" if note_id else "",
                 "platform": "xiaohongshu",
@@ -381,7 +382,7 @@ async def _extract_posts_from_dom(page, keyword: str, limit: int) -> List[Dict]:
             href = f"https://www.xiaohongshu.com{href}"
         posts.append(
             {
-                "id": note_id or f"xhs_{abs(hash(title))}",
+                "id": note_id or fallback_id("xiaohongshu", url=href, title=title),
                 "title": title[:180],
                 "url": href,
                 "platform": "xiaohongshu",

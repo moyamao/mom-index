@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from urllib.parse import quote
 
 from .anti_detection import get_anti_detection
+from post_identity import fallback_id
 from runtime_config import ini_get_bool, ini_get_float, ini_get_int
 
 try:
@@ -367,7 +368,7 @@ async def _extract_posts_from_dom(page, keyword: str, limit: int, prefer_realtim
         mid_match = re.search(r"/(?:detail|status)/([^/?#]+)", href)
         posts.append(
             {
-                "id": mid_match.group(1) if mid_match else f"weibo_pw_{abs(hash(title))}",
+                "id": mid_match.group(1) if mid_match else fallback_id("weibo", url=href, author=item.get("author"), content=content),
                 "title": title[:180],
                 "content": content,
                 "url": href,

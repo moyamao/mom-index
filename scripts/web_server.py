@@ -4,7 +4,7 @@ import json
 import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -74,15 +74,19 @@ def _dashboard_payload():
     dashboard_path = os.path.join(ROOT, "data", "dashboard_data.json")
     with open(dashboard_path, "r", encoding="utf-8") as handle:
         dashboard = json.load(handle)
-    from analyzer.platform_trends import fetch_model_sector_history, fetch_platform_trends
+    from analyzer.platform_trends import history_from_snapshots, fetch_platform_trends
+    from post_time import beijing_now
     from storage.mysql_store import fetch_model_comparison, fetch_model_daily_snapshots, fetch_production_summary
     comparison = fetch_model_comparison()
-    snapshots = fetch_model_daily_snapshots()
+    all_days = fetch_model_daily_snapshots(days=None)
+    model_history = history_from_snapshots(all_days)
+    cutoff = (beijing_now().date() - timedelta(days=29)).isoformat()
+    snapshots = {profile: [day for day in days if day["date"] >= cutoff]
+                 for profile, days in all_days.items()}
     dashboard["model_comparison"] = comparison
     dashboard["model_daily_snapshots"] = snapshots
     dashboard["production_summary"] = fetch_production_summary()
     dashboard["platform_sentiment_trends"] = fetch_platform_trends()
-    model_history = fetch_model_sector_history()
     dashboard["model_sector_history"] = model_history
     dashboard["sector_catalog"] = list_sector_records(enabled_only=True)
     _apply_latest_model_snapshot(dashboard, comparison, snapshots, model_history)

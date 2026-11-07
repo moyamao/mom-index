@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import re
+import uuid
 from datetime import datetime, timedelta
 
 # 确保项目根目录在 path 中
@@ -23,7 +24,7 @@ from storage.mysql_store import (
 )
 from keyword_config import get_keywords, get_sector_catalog
 from runtime_config import ini_get, ini_get_bool, ini_get_int
-from post_time import normalize_social_datetime, beijing_now
+from post_time import normalize_social_datetime, beijing_now, report_day
 from local_llm_runtime import local_llm_for_analysis
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -138,8 +139,8 @@ def _build_post_detail_dataset(all_posts: dict, analysis_results: dict) -> dict:
     }
 
 
-def _build_current_snapshot(sector_indices: dict) -> dict:
-    now = beijing_now()
+def _build_current_snapshot(sector_indices: dict, now=None) -> dict:
+    now = now or beijing_now()
     report_date = (now - timedelta(days=1)).date() if now.hour < 6 else now.date()
     return {
         "date": report_date.isoformat(),
@@ -332,23 +333,14 @@ def _deconflict_cross_sector_posts(all_posts: dict) -> dict:
     return result
 
 
-def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
+def _filter_recent_posts(all_posts: dict, now=None) -> tuple[dict, dict]:
     """优先使用目标自然日样本；数量不足时自动扩大到最近若干天。"""
     max_age_days = max(1, ini_get_int("recency", "max_age_days", 7))
     daily_min_posts = max(1, ini_get_int("recency", "daily_min_posts", 20))
-    now = beijing_now()
-    cutoff = now - timedelta(days=max_age_days)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if now.hour < 6:
-        day_start = today_start - timedelta(days=1)
-        day_end = today_start
-        day_label = "昨日"
-        in_target_day = lambda published: day_start <= published < day_end
-    else:
-        day_start = today_start
-        day_end = now
-        day_label = "今日"
-        in_target_day = lambda published: day_start <= published <= day_end
+    now = now or beijing_now()
+    target_day = report_day(now, now)
+    cutoff = min(now - timedelta(days=max_age_days), datetime.combine(target_day, datetime.min.time()))
+    day_label = "昨日" if target_day < now.date() else "今日"
     filtered_posts = {}
     windows = {}
 
@@ -361,7 +353,9 @@ def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
         for post in posts:
             collected = normalize_social_datetime(post.get("collected_at")) or now.isoformat(sep=" ")
             post["collected_at"] = collected
-            raw_time = normalize_social_datetime(post.get("published_at"), datetime.fromisoformat(collected))
+            collected_at = datetime.fromisoformat(collected)
+            raw_time = (normalize_social_datetime(post.get("published_at"), collected_at)
+                        or normalize_social_datetime(post.get("date"), collected_at))
             post["published_at"] = raw_time
             post["time_zone"] = "Asia/Shanghai"
             try:
@@ -389,7 +383,7 @@ def _filter_recent_posts(all_posts: dict) -> tuple[dict, dict]:
         kept.sort(key=lambda post: post["published_at"], reverse=True)
         daily_posts = [
             post for post in kept
-            if in_target_day(datetime.fromisoformat(post["published_at"]))
+            if report_day(post["published_at"], now) == target_day
         ]
         use_daily = len(daily_posts) >= daily_min_posts
         selected = daily_posts if use_daily else kept
@@ -449,7 +443,9 @@ def run_pipeline():
 
     all_posts = _deconflict_cross_sector_posts(all_posts)
     all_posts = _dedupe_posts_by_title(all_posts)
-    all_posts, analysis_windows = _filter_recent_posts(all_posts)
+    collection_at = (datetime.fromisoformat(reused_collection["run_at"])
+                     if reused_collection and not refreshed_platforms else beijing_now())
+    all_posts, analysis_windows = _filter_recent_posts(all_posts, collection_at)
 
     if mysql_enabled():
         from analyzer.llm_sentiment import llm_profile
@@ -494,8 +490,6 @@ def run_pipeline():
     
     # ===== 第4步: 存储历史 =====
     print("\n💾 第4步: 存储历史记录")
-    add_record(sector_indices, analysis_results)
-    
     dashboard = get_dashboard_data()
     from analyzer.llm_sentiment import llm_model_name, llm_profile, llm_prompt_version
     dashboard["analysis_identity"] = {
@@ -506,27 +500,36 @@ def run_pipeline():
         or ini_get("runtime", "role", "analyst"),
     }
     dashboard["history_latest"] = dashboard.get("latest")
-    dashboard["latest"] = _build_current_snapshot(sector_indices)
+    dashboard["latest"] = _build_current_snapshot(sector_indices, collection_at)
 
     run_id = None
     if mysql_enabled():
         print("\n🗄️ 第5.5步: 写入 MySQL")
+        note = f"collector:{uuid.uuid4().hex}"
         try:
             if reused_collection and not refreshed_platforms:
                 run_id = reused_collection["run_id"]
                 batch_id = persist_standalone_analysis(
                     analysis_results,
                     all_posts,
-                    note=f"reuse collection run_id={run_id}",
+                    note=note,
                 )
                 print(f"  MySQL 分析写入成功: collection_run_id={run_id}, batch_id={batch_id}")
             else:
-                run_id = persist_pipeline_run(all_posts, analysis_results, sector_indices, dashboard)
+                run_id = persist_pipeline_run(all_posts, analysis_results, sector_indices, dashboard, note=note)
                 if run_id:
                     refresh_note = f"，增量刷新 {','.join(sorted(refreshed_platforms))}" if refreshed_platforms else ""
                     print(f"  MySQL 采集与分析写入成功: run_id={run_id}{refresh_note}")
         except Exception as e:
-            print(f"  MySQL 写入跳过: {e}")
+            from storage.pending_run import save_pending_run
+            path = save_pending_run(note, all_posts, analysis_results, sector_indices, dashboard,
+                                    reused_collection["run_id"] if reused_collection and not refreshed_platforms else None)
+            raise RuntimeError(f"MySQL 写入失败，本次不发布；恢复文件：{path}") from e
+
+    add_record(sector_indices, analysis_results, run_at=collection_at)
+    history = get_dashboard_data()
+    dashboard.update({k: v for k, v in history.items() if k != "latest"})
+    dashboard["history_latest"] = history.get("latest")
 
     # ===== 第5步: 输出前端数据 =====
     try:
@@ -582,82 +585,5 @@ def run_pipeline():
     return dashboard
 
 
-def generate_sample_history(days: int = 30):
-    """生成模拟历史数据（用于展示前端曲线效果）"""
-    import random
-    import math
-    
-    history = {"records": []}
-    base_indices = {
-        "nasdaq": 35,
-        "gold": 28,
-        "cpo": 22,
-        "semiconductor": 30,
-        "storage": 32,
-    }
-    
-    today = datetime.now()
-    for i in range(days, 0, -1):
-        d = today.replace(day=min(today.day, 28))  # 简化
-        d = d.replace(day=max(1, d.day - i))
-        record = {"date": d.strftime("%Y-%m-%d"), "sectors": {}}
-        
-        for sector, base in base_indices.items():
-            # 模拟波动：当前趋势 + 随机噪音
-            trend = 15 * math.sin(i / 10.0)  # 周期性波动
-            noise = random.uniform(-8, 8)
-            idx = round(base + trend + noise, 1)
-            idx = max(-100, min(100, idx))
-            
-            record["sectors"][sector] = {
-                "index": idx,
-                "interpretation": interpret(idx),
-                "details": {
-                    "total_posts": random.randint(60, 85),
-                    "valid_posts": random.randint(55, 80),
-                    "opinion_posts": random.randint(40, 70),
-                    "news_posts": random.randint(5, 20),
-                    "spam_posts": random.randint(0, 5),
-                },
-            }
-        
-        history["records"].append(record)
-    
-    history["records"].sort(key=lambda r: r["date"])
-    return history
-
-
-def interpret(idx):
-    if idx >= 75: return "🔴 极度狂热"
-    if idx >= 60: return "🟠 高度警惕"
-    if idx >= 40: return "🟡 开始升温"
-    if idx >= 20: return "🟢 正常区间"
-    return "🔵 极度冷清"
-
-
 if __name__ == "__main__":
-    # 先跑真实采集
-    dashboard = run_pipeline()
-    
-    # 如果历史数据不够，补充模拟数据
-    if dashboard["record_count"] < 5:
-        print("\n📝 历史数据不足，生成30天模拟数据用于前端展示...")
-        sample = generate_sample_history(30)
-        from analyzer.index_calculator import save_history
-        # 合并：保留真实数据，补充模拟历史
-        existing = dashboard.get("sector_history", {})
-        real_dates = set()
-        if dashboard["latest"]:
-            real_dates.add(dashboard["latest"]["date"])
-        
-        history = {"records": []}
-        for r in sample["records"]:
-            if r["date"] not in real_dates:
-                history["records"].append(r)
-        # 再加回真实记录
-        history["records"].extend([
-            r for r in sample["records"] if r["date"] in real_dates
-        ])
-        history["records"].sort(key=lambda r: r["date"])
-        save_history(history)
-        print(f"  已生成 {len(history['records'])} 天历史数据")
+    run_pipeline()

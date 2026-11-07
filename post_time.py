@@ -28,6 +28,8 @@ def report_day(post_datetime: object, run_at: object = None) -> date | None:
 
 def normalize_social_datetime(raw_value: object, now: datetime | None = None) -> str:
     raw = re.sub(r"\s+", " ", str(raw_value or "")).strip()
+    raw = re.sub(r"(\d+)年(\d+)月(\d+)日?", r"\1-\2-\3", raw)
+    raw = re.sub(r"(\d+)月(\d+)日", r"\1-\2", raw)
     if not raw or raw == "未知":
         return ""
 
@@ -41,6 +43,12 @@ def normalize_social_datetime(raw_value: object, now: datetime | None = None) ->
         return value.strftime('%Y-%m-%d %H:%M:%S')
     except ValueError:
         pass
+    if re.match(r"^[A-Za-z]{3} [A-Za-z]{3} ", raw):
+        try:
+            value = datetime.strptime(raw, "%a %b %d %H:%M:%S %z %Y")
+            return value.astimezone(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return ""
     if "刚刚" in raw:
         return now.strftime("%Y-%m-%d %H:%M:%S")
 

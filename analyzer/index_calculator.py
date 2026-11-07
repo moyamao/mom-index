@@ -1,8 +1,8 @@
 """Market sentiment aggregation by sector and platform."""
-from datetime import datetime, date
 from typing import Dict, List
 import json
 import os
+from post_time import beijing_now, report_day
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
@@ -271,11 +271,14 @@ def _merge_record_by_date(history: Dict, record: Dict):
     history["records"] = _normalize_history_records(history.get("records", []) + [record])
 
 
-def _build_daily_records(analysis_results: Dict[str, List]) -> List[Dict]:
+def _build_daily_records(analysis_results: Dict[str, List], run_at=None) -> List[Dict]:
     grouped: Dict[str, Dict[str, List]] = {}
     for sector, results in analysis_results.items():
         for item in results:
-            day = item.source_date or datetime.now().strftime("%Y-%m-%d")
+            day = report_day(item.source_datetime or item.source_date, run_at)
+            if day is None:
+                continue
+            day = day.isoformat()
             grouped.setdefault(day, {}).setdefault(sector, []).append(item)
 
     records = []
@@ -302,19 +305,13 @@ def _build_daily_records(analysis_results: Dict[str, List]) -> List[Dict]:
     return records
 
 
-def add_record(sector_indices: Dict[str, Dict], analysis_results: Dict):
+def add_record(sector_indices: Dict[str, Dict], analysis_results: Dict, run_at=None):
     """按帖子日期聚合，添加多条历史记录。"""
     history = load_history()
 
-    records = _build_daily_records(analysis_results)
+    records = _build_daily_records(analysis_results, run_at or beijing_now())
     if not records:
-        records = [
-            {
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "timestamp": datetime.now().isoformat(),
-                "sectors": sector_indices,
-            }
-        ]
+        return
 
     for record in records:
         _merge_record_by_date(history, record)

@@ -50,33 +50,22 @@ def build_platform_trends(rows):
                        for (profile, s, p, t), r in sorted(series.items())]}
 
 
-def build_model_sector_history(rows):
-    """Aggregate deduplicated opinion sentiment by profile, sector and source day."""
-    groups = defaultdict(list)
-    seen = set()
-    for row in rows:
-        profile = row.get('analysis_profile') or 'legacy'
-        post_id = row.get('post_id') or ''
-        key = (profile, row.get('sector'), row.get('platform'), post_id)
-        if not post_id or key in seen:
-            continue
-        seen.add(key)
-        stamp = normalize_social_datetime(row.get('post_datetime'))
-        if (not stamp or row.get('analysis_engine') != 'llm'
-                or row.get('content_type') != 'opinion'
-                or row.get('level') in {'垃圾帖', '资讯帖'}):
-            continue
-        day = report_day(stamp, row.get('source_run_at')).isoformat()
-        groups[(profile, row['sector'], day)].append(float(row.get('sentiment_score') or 0))
+def history_from_snapshots(snapshots):
+    history = {}
+    for profile, days in snapshots.items():
+        series = defaultdict(list)
+        for day in days:
+            for sector, summary in day["sectors"].items():
+                count = summary["details"]["llm_profile"]["analyzed_posts"]
+                if count:
+                    series[sector].append({"date": day["date"], "index": summary["index"], "post_count": count})
+        history[profile] = dict(series)
+    return history
 
-    history = defaultdict(lambda: defaultdict(list))
-    for (profile, sector, day), scores in sorted(groups.items()):
-        history[profile][sector].append({
-            'date': day,
-            'index': round(sum(scores) / len(scores) * 100, 1),
-            'post_count': len(scores),
-        })
-    return {profile: dict(sectors) for profile, sectors in history.items()}
+
+def build_model_sector_history(rows):
+    from storage.mysql_store import build_model_daily_snapshots
+    return history_from_snapshots(build_model_daily_snapshots(rows))
 
 
 def fetch_platform_trends():
@@ -104,24 +93,5 @@ def fetch_platform_trends():
 
 
 def fetch_model_sector_history():
-    from storage.mysql_store import _connect, mysql_enabled
-    if not mysql_enabled():
-        return {}
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute('''
-                SELECT p.sector, p.platform, p.post_id, p.post_datetime,
-                       r.run_at AS source_run_at,
-                       a.level, a.sentiment_score, a.analysis_profile,
-                       a.analysis_engine, a.content_type
-                FROM mom_index_posts p JOIN mom_index_analysis a
-                  ON a.run_id=p.run_id AND a.sector=p.sector
-                 AND a.platform=p.platform AND a.post_id=p.post_id
-                JOIN mom_index_runs r ON r.id=p.run_id
-                WHERE p.post_datetime IS NOT NULL
-                ORDER BY a.id DESC
-            ''')
-            return build_model_sector_history(cur.fetchall())
-    finally:
-        conn.close()
+    from storage.mysql_store import fetch_model_daily_snapshots
+    return history_from_snapshots(fetch_model_daily_snapshots(days=None))
