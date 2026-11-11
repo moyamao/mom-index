@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import requests
+from .llm_contract import validate_model_payload
 
 from .llm_sentiment import (
     LlmSentimentDecision,
@@ -131,10 +132,11 @@ def call_model(config: dict[str, str], *, title: str, content: str, sector: str,
             response = requests.post(config["base_url"] + "/chat/completions", headers=headers,
                                      json=payload, timeout=timeout, **options)
             response.raise_for_status()
-            raw = str(response.json().get("choices", [{}])[0].get("message", {}).get("content", ""))
-            parsed = _parse_json_payload(raw)
-            if not isinstance(parsed, dict):
-                raise ValueError("响应中没有可解析的JSON对象")
+            choice = response.json().get("choices", [{}])[0]
+            if choice.get("finish_reason") == "length":
+                raise ValueError("LLM输出被token上限截断")
+            raw = str(choice.get("message", {}).get("content", ""))
+            parsed = validate_model_payload(_parse_json_payload(raw))
             decision = _decision(parsed)
             attempts.append({"attempt": number, "seconds": round(time.perf_counter()-started, 3), "error": ""})
             return {"ok": True, "model": config["model"], "decision": asdict(decision), "attempts": attempts}

@@ -1,7 +1,8 @@
+import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from analyzer.llm_consensus import adjudicate, material_disagreements, _decision
+from analyzer.llm_consensus import adjudicate, call_model, material_disagreements, _decision
 
 
 def value(**overrides):
@@ -109,6 +110,35 @@ class ConsensusTests(unittest.TestCase):
         first=_decision(value(market_outlook='bullish'))
         second=_decision(value(market_outlook='bearish'))
         self.assertEqual(material_disagreements(first,second),['market_outlook'])
+
+    @patch('analyzer.llm_consensus.requests.post')
+    def test_invalid_model_json_remains_failure_after_retries(self, post):
+        reply = Mock()
+        reply.raise_for_status.return_value = None
+        reply.json.return_value = {'choices': [{'message': {'content': '{}'}, 'finish_reason': 'stop'}]}
+        post.return_value = reply
+        result = call_model({'base_url': 'http://127.0.0.1:8080/v1', 'model': 'local', 'api_key': ''},
+                            title='跌麻了', content='', sector='storage', platform='xueqiu', timeout=1)
+        self.assertFalse(result['ok'])
+        self.assertIsNone(result['decision'])
+        self.assertEqual(len(result['attempts']), 3)
+        self.assertEqual(post.call_count, 3)
+        self.assertIn('missing required fields', result['error'])
+
+    @patch('analyzer.llm_consensus.requests.post')
+    def test_valid_core_response_allows_optional_maturity(self, post):
+        payload = value(sentiment_score=0, emotion_intensity=0)
+        del payload['investor_maturity']
+        del payload['maturity_confidence']
+        reply = Mock()
+        reply.raise_for_status.return_value = None
+        reply.json.return_value = {'choices': [{'message': {'content': json.dumps(payload)}, 'finish_reason': 'stop'}]}
+        post.return_value = reply
+        result = call_model({'base_url': 'http://127.0.0.1:8080/v1', 'model': 'local', 'api_key': ''},
+                            title='存储还没跌完', content='', sector='storage', platform='xueqiu', timeout=1)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['decision']['investor_maturity'], 'unknown')
+        self.assertEqual(post.call_count, 1)
 
 
 if __name__=='__main__':

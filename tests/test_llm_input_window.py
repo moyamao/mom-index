@@ -18,6 +18,17 @@ class LlmInputWindowTests(unittest.TestCase):
         prompt = _system_prompt(include_reasoning=False)
         self.assertIn("看涨预期与当前焦虑可以并存", prompt)
 
+    def test_experimental_prompt_keeps_short_action_and_outlook_examples(self):
+        prompt = _system_prompt(include_reasoning=False, prompt_version="sentiment-v7")
+        self.assertIn("存储还没跌完", prompt)
+        self.assertIn("情绪neutral/0/[]，预期bearish", prompt)
+        self.assertIn("今天清仓了", prompt)
+        self.assertNotIn('"investor_maturity"', prompt)
+
+    def test_explicit_baseline_prompt_does_not_inherit_experiment(self):
+        prompt = _system_prompt(include_reasoning=True, prompt_version="sentiment-v6")
+        self.assertIn('"investor_maturity"', prompt)
+
     def test_xueqiu_reply_excludes_quoted_history(self):
         text = _analysis_text(
             title="回复@仰望太阳: 需要开港卡吗？ //@仰望太阳:回复@文少满满仓:请问买美股",

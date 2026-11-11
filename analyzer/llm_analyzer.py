@@ -538,7 +538,7 @@ def _has_llm_review_cue(post: Dict) -> bool:
 def _apply_llm_second_pass(result: AnalysisResult, post: Dict) -> None:
     try:
         llm_decision = analyze_sentiment_with_llm(
-            title=result.title,
+            title=post.get("title", "") or result.title,
             content=post.get("content", "") or "",
             sector=result.sector,
             platform=result.platform,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ import requests
 
 from runtime_config import ini_get, ini_get_bool, ini_get_float, ini_get_int, ini_get_optional
 from analyzer.model_privacy import request_options
+from analyzer.llm_contract import model_response_format, validate_model_payload
+from analyzer.sentiment_prompts import sentiment_v7_prompt
 
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -146,6 +149,40 @@ def _request_reasoning() -> bool:
     return ini_get_bool("llm", "include_reasoning", True)
 
 
+def generation_options() -> dict:
+    """Explicit opt-in sampler settings; retain the production temperature default."""
+    options = {}
+    specs = {
+        "temperature": (float, 0, 2), "top_p": (float, 0, 1),
+        "top_k": (int, 0, None), "min_p": (float, 0, 1),
+        "repeat_penalty": (float, 0, None), "seed": (int, -1, 4294967295),
+    }
+    for name, (cast, low, high) in specs.items():
+        raw = os.environ.get(f"MOM_INDEX_LLM_{name.upper()}", "").strip() or ini_get("llm", name, "")
+        if not raw:
+            continue
+        try:
+            number = cast(raw)
+            if not math.isfinite(number) or number < low or (high is not None and number > high):
+                raise ValueError()
+            if name == "repeat_penalty" and number == 0:
+                raise ValueError()
+        except (ValueError, OverflowError):
+            raise ValueError(f"无效LLM采样参数：{name}") from None
+        options[name] = number
+    options.setdefault("temperature", 0.1)
+    return options
+
+
+def _response_format() -> dict:
+    mode = os.environ.get("MOM_INDEX_LLM_RESPONSE_FORMAT", "").strip() or ini_get("llm", "response_format", "json_object")
+    if mode == "json_schema":
+        return model_response_format()
+    if mode != "json_object":
+        raise ValueError("response_format必须为json_object或json_schema")
+    return {"type": "json_object"}
+
+
 def llm_ready() -> bool:
     # llama-server does not require an API key by default.
     return llm_sentiment_enabled() and bool(_model())
@@ -182,13 +219,15 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
         return None
 
     text = _analysis_text(title=title, content=content, platform=platform, max_chars=_max_chars())
-    if len(text.strip()) < 8:
+    # Short actions and even emoji-only posts can express an author's emotion.
+    # Only an actually empty input can be skipped without semantic judgement.
+    if not text:
         return LlmSentimentDecision(
             content_type="news", sentiment_score=0.0, sentiment_label="neutral",
             emotion_tags=[], emotion_intensity=0.0, intent="neutral", intent_strength=0.0,
             position_status="unknown", market_outlook="unknown",
             investor_maturity="not_applicable", maturity_confidence=1.0, confidence=1.0,
-            reasoning="文本过短且缺少正文，信息不足，仅计数，不参与情绪和交易意图分析。",
+            reasoning="标题和正文为空，信息不足，仅计数。",
             source="insufficient",
         )
 
@@ -198,29 +237,21 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
     if _api_key():
         headers["Authorization"] = f"Bearer {_api_key()}"
 
-    attempts = [text]
-    shorter = _analysis_text(title=title, content=content, platform=platform, max_chars=min(500, _max_chars()))
-    attempts.extend([shorter, shorter])
-
+    prompt_version = llm_prompt_version()
+    payload = {
+        "model": _model(),
+        **generation_options(),
+        "max_tokens": max(768 if prompt_version == "sentiment-v7" else 384, _max_output_tokens()),
+        "chat_template_kwargs": {"enable_thinking": False},
+        "response_format": _response_format(),
+        "messages": [
+            {"role": "system", "content": _system_prompt(include_reasoning=_request_reasoning(), prompt_version=prompt_version)},
+            {"role": "user", "content": json.dumps(
+                {"sector": sector, "platform": platform, "analysis_text": text}, ensure_ascii=False)},
+        ],
+    }
     parsed = None
-    for attempt, analysis_text in enumerate(attempts, start=1):
-        payload = {
-            "model": _model(),
-            "temperature": 0.1,
-            "max_tokens": max(384, _max_output_tokens()),
-            "chat_template_kwargs": {"enable_thinking": False},
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": _system_prompt(include_reasoning=_request_reasoning())},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {"sector": sector, "platform": platform, "analysis_text": analysis_text},
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-        }
+    for attempt in range(1, 4):
         try:
             resp = requests.post(
                 f"{base_url}/chat/completions",
@@ -231,17 +262,15 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
             )
             resp.raise_for_status()
             data = resp.json()
-            content_text = (
-                data.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-            )
-            parsed = _parse_json_payload(content_text)
-            if isinstance(parsed, dict):
-                break
-        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
-            if attempt >= len(attempts):
-                return None
+            choice = data.get("choices", [{}])[0]
+            if choice.get("finish_reason") == "length":
+                raise ValueError("LLM输出被token上限截断")
+            content_text = choice.get("message", {}).get("content", "")
+            parsed = validate_model_payload(_parse_json_payload(content_text))
+            break
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
+            if attempt == 3:
+                raise ValueError(f"LLM请求/结果校验失败（已尝试3次）：{exc}") from exc
     if not isinstance(parsed, dict):
         return None
 
@@ -285,7 +314,9 @@ def _truncate_text(*, title: str, content: str, max_chars: int) -> str:
     return text[:head_chars] + separator + text[-tail_chars:]
 
 
-def _system_prompt(*, include_reasoning: bool) -> str:
+def _system_prompt(*, include_reasoning: bool, prompt_version: Optional[str] = None) -> str:
+    if (prompt_version or llm_prompt_version()) == "sentiment-v7":
+        return sentiment_v7_prompt(include_reasoning=include_reasoning)
     reasoning_line = (
         '"reasoning": "一句话说明依据"'
         if include_reasoning
