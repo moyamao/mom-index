@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 import requests
 
 from analyzer.llm_contract import EMOTION_TAGS, ENUMS, model_response_format, validate_model_payload
-from analyzer.llm_sentiment import _analysis_text, _parse_json_payload, _system_prompt
+from analyzer.llm_sentiment import ANALYSIS_TEXT_VERSION, _analysis_text, _parse_json_payload, _system_prompt
 from analyzer.model_privacy import request_options
 from local_llm_runtime import LocalLlmRuntime
 from runtime_config import ini_get_int
@@ -35,6 +35,7 @@ from scripts.sentiment_eval_comparison import write_paired_comparison
 VARIANTS = {
     "baseline": ("sentiment-v6", {"temperature": 0.1}),
     "prompt": ("sentiment-v7", {"temperature": 0.1}),
+    "refined": ("sentiment-v7.1", {"temperature": 0.1}),
     "greedy": ("sentiment-v7", {"temperature": 0}),
     "official": ("sentiment-v7", {
         "temperature": 0.7, "top_p": 0.8, "top_k": 20,
@@ -93,6 +94,13 @@ def seed_value(value):
     return number
 
 
+def sha256_value(value):
+    value = value.lower()
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise argparse.ArgumentTypeError("样本摘要必须是64位十六进制SHA-256")
+    return value
+
+
 def validate_gold(gold, identifier):
     if not isinstance(gold, dict) or set(gold) - GOLD_FIELDS:
         raise ValueError(f"{identifier} 的gold字段不受支持：只支持 {sorted(GOLD_FIELDS)}")
@@ -145,6 +153,8 @@ def validate_samples(rows, split="all", limit=None):
             if not isinstance(row.get(name, ""), str):
                 raise ValueError(f"{row['id']} 的 {name} 必须是字符串")
             row.setdefault(name, "")
+        if "analysis_text" in row and not isinstance(row["analysis_text"], str):
+            raise ValueError(f"{row['id']} 的历史 analysis_text 必须是字符串")
         row["gold"] = validate_gold(row.get("gold", {}), row["id"])
         if split == "all" or row.get("split") == split:
             checked.append(row)
@@ -213,9 +223,10 @@ def evaluation_runtime(args):
                 os.environ[key] = value
 
 
-def evaluate_one(session, base_url, model, row, variant, seed, repeat, args):
+def evaluate_one(session, base_url, model, row, variant, seed, repeat, args, *, analysis_text=None):
     version, generation = VARIANTS[variant]
-    text = _analysis_text(title=row["title"], content=row["content"], platform=row["platform"], max_chars=args.max_chars)
+    text = (analysis_text if analysis_text is not None else
+            _analysis_text(title=row["title"], content=row["content"], platform=row["platform"], max_chars=args.max_chars))
     prompt = _system_prompt(include_reasoning=True, prompt_version=version)
     payload = {
         "model": model, **generation, "seed": seed, "max_tokens": args.max_tokens,
@@ -230,6 +241,10 @@ def evaluate_one(session, base_url, model, row, variant, seed, repeat, args):
         "id": row["id"], "variant": variant, "prompt_version": version,
         "seed": seed, "repeat": repeat, "split": row.get("split", "unassigned"),
         "gold": row["gold"], "analysis_text": text, "input_sha256": digest(text),
+        "input_mode": "reprocess_title_and_content", "preprocessing_version": ANALYSIS_TEXT_VERSION,
+        "historical_analysis_text": row.get("analysis_text"),
+        "historical_input_sha256": digest(row["analysis_text"]) if "analysis_text" in row else None,
+        "input_changed_from_history": row["analysis_text"] != text if "analysis_text" in row else None,
         "prompt_sha256": digest(prompt), "request_sha256": digest(payload),
         "status": "failed", "decision": None, "attempts": [],
     }
@@ -383,11 +398,31 @@ def run(args, session=None):
         if len(samples) != args.sample_size:
             raise ValueError("MySQL抽样数量不符合要求，未启动模型")
         selection["sampling"] = sampling
+    else:
+        samples, selection = load_samples(args.input, args.smoke, args.split, args.limit)
+    dataset_sha256 = digest(samples)
+    if args.expect_dataset_sha256 and dataset_sha256 != args.expect_dataset_sha256:
+        raise ValueError(f"样本摘要不匹配，未调用模型：期望={args.expect_dataset_sha256}，实际={dataset_sha256}")
+    prepared_inputs = {
+        sample["id"]: _analysis_text(title=sample["title"], content=sample["content"],
+                                     platform=sample["platform"], max_chars=args.max_chars)
+        for sample in samples
+    }
+    historical = [sample for sample in samples if "analysis_text" in sample]
+    changed_ids = [sample["id"] for sample in historical if sample["analysis_text"] != prepared_inputs[sample["id"]]]
+    selection["historical_input_comparison"] = {
+        "available_count": len(historical), "changed_count": len(changed_ids),
+        "unchanged_count": len(historical) - len(changed_ids),
+        "missing_count": len(samples) - len(historical), "changed_ids": changed_ids,
+    }
+    selection["actual_input_dataset_sha256"] = digest([
+        {"id": sample["id"], "analysis_text": prepared_inputs[sample["id"]]} for sample in samples
+    ])
+    selection["expected_dataset_sha256"] = args.expect_dataset_sha256
+    if args.mysql:
         directory.mkdir(parents=True, exist_ok=False)
         freeze_samples(directory, samples, sampling)
         print(f"已从MySQL随机抽取并固定{len(samples)}条：{directory / 'samples.jsonl'}", flush=True)
-    else:
-        samples, selection = load_samples(args.input, args.smoke, args.split, args.limit)
     variants = list(dict.fromkeys(args.variant or ["baseline", "prompt"]))
     seeds = list(dict.fromkeys(args.seeds))
     owned_session = session is None
@@ -399,13 +434,13 @@ def run(args, session=None):
             effective_args = argparse.Namespace(**vars(args))
             effective_args.timeout = timeout
             return run_evaluation(effective_args, samples, selection, variants, seeds, directory,
-                                  session, base_url, expected_model)
+                                  session, base_url, expected_model, prepared_inputs)
     finally:
         if owned_session:
             session.close()
 
 
-def run_evaluation(args, samples, selection, variants, seeds, directory, session, base_url, expected_model):
+def run_evaluation(args, samples, selection, variants, seeds, directory, session, base_url, expected_model, prepared_inputs):
     model = discover_model(session, base_url, expected_model, min(args.timeout, 15))
     if not args.mysql:
         directory.mkdir(parents=True, exist_ok=False)
@@ -415,12 +450,13 @@ def run_evaluation(args, samples, selection, variants, seeds, directory, session
         "input": ("mysql random sample; frozen samples.jsonl; no human gold" if args.mysql else
                   str(args.input) if args.input else "synthetic smoke examples; no human gold"),
         "dataset_sha256": digest(samples), **selection, "split": args.split,
+        "input_mode": "reprocess_title_and_content", "preprocessing_version": ANALYSIS_TEXT_VERSION,
         "variants": {name: {"prompt_version": VARIANTS[name][0], **VARIANTS[name][1]} for name in variants},
         "seeds": seeds, "repeats_per_seed": args.repeats,
         "max_chars": args.max_chars, "max_tokens": args.max_tokens, "timeout_seconds": args.timeout,
         "started_local_model": args.start_local_model,
         "schema": model_response_format(), "status": "running",
-        "comparison_note": "baseline是v6提示词控制组；所有组共用严格输出契约和token预算，并非重放旧生产流程。official同时改变多项采样参数。",
+        "comparison_note": "所有组使用同一次预处理后的相同输入，并保留历史输入供审计；源帖子相同不等于逐字重放旧评测。baseline是v6提示词控制组。所有组共用严格输出契约和token预算。official同时改变多项采样参数。",
     }
     with (directory / "metadata.json").open("x", encoding="utf-8") as out:
         json.dump(metadata, out, ensure_ascii=False, indent=2)
@@ -431,12 +467,15 @@ def run_evaluation(args, samples, selection, variants, seeds, directory, session
             for sample in samples:
                 for seed in seeds:
                     for repeat in range(1, args.repeats + 1):
-                        row = evaluate_one(session, base_url, model, sample, variant, seed, repeat, args)
+                        row = evaluate_one(session, base_url, model, sample, variant, seed, repeat, args,
+                                           analysis_text=prepared_inputs[sample["id"]])
                         out.write(json.dumps(row, ensure_ascii=False) + "\n")
                         out.flush()
                         rows.append(row)
                         print(f"[{len(rows)}/{expected}] {variant} {sample['id']} {row['status']} {row['seconds']:.2f}s", flush=True)
-    comparison = write_paired_comparison(directory, samples, rows)
+    comparison_options = ({"left_variant": variants[0], "right_variant": variants[1]}
+                          if len(variants) == 2 else {})
+    comparison = write_paired_comparison(directory, samples, rows, **comparison_options)
     report = {"status": "complete", "expected_runs": expected, "completed_runs": len(rows),
               "variants": summarize(rows), "comparison": comparison}
     with (directory / "summary.json").open("x", encoding="utf-8") as out:
@@ -459,6 +498,8 @@ def parser():
     ap.add_argument("--days", type=positive_int, default=30, help="MySQL抽样的北京时间滚动天数，默认30")
     ap.add_argument("--sample-size", type=positive_int, default=100, help="MySQL去重后随机样本数，默认100；不足即停止")
     ap.add_argument("--sample-seed", type=seed_value, default=20261111, help="MySQL抽样种子；与模型的--seeds不同")
+    ap.add_argument("--expect-dataset-sha256", type=sha256_value,
+                    help="选定样本的逻辑JSON摘要；不匹配时在模型启动或请求前停止")
     ap.add_argument("--output-dir", type=Path, help="必须不存在；默认在outputs/sentiment-eval创建独立目录")
     ap.add_argument("--base-url", help="默认QWEN_BASE_URL或http://127.0.0.1:8080；自动启动时使用本机地址")
     ap.add_argument("--start-local-model", action="store_true", help="按[local_llm]配置启动本机模型；结束/异常时关闭本次启动的进程")

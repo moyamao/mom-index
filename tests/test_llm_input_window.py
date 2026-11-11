@@ -1,6 +1,6 @@
 import unittest
 
-from analyzer.llm_sentiment import _analysis_text, _truncate_text, _system_prompt
+from analyzer.llm_sentiment import _analysis_text, _truncate_text, _system_prompt, QUOTE_ONLY_TEXT
 
 
 class LlmInputWindowTests(unittest.TestCase):
@@ -42,6 +42,62 @@ class LlmInputWindowTests(unittest.TestCase):
     def test_other_posts_keep_regular_content(self):
         text = _analysis_text(title="普通标题", content="我的当前观点", platform="xueqiu", max_chars=1200)
         self.assertIn("我的当前观点", text)
+
+    def test_reply_uses_full_matching_body_instead_of_page_title_excerpt(self):
+        text = _analysis_text(title="回复@甲: 我正在考虑... - 雪球",
+                              content="回复@甲: 我正在考虑买入，但还未下单。 //@甲: 我已经满仓了",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(text, "本次回复 我正在考虑买入，但还未下单。")
+        self.assertNotIn("满仓", text)
+        self.assertNotIn("雪球", text)
+
+    def test_empty_reply_never_falls_back_to_quote(self):
+        text = _analysis_text(title="回复@甲: //@甲:我满仓买入很开心",
+                              content="回复@甲: //@甲:我满仓买入很开心，后面还会大涨",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(text, QUOTE_ONLY_TEXT)
+        self.assertNotIn("满仓", text)
+
+    def test_unrelated_reply_body_cannot_replace_current_title(self):
+        text = _analysis_text(title="回复@甲: 我没有买入 //@甲:市场大涨",
+                              content="回复@乙: 我买了很多 //@乙:看涨",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(text, "本次回复 我没有买入")
+
+    def test_reply_in_body_without_reply_title_is_extracted(self):
+        text = _analysis_text(title="查看讨论", content="回复@甲：还没操作 // @甲:赶紧买",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(text, "查看讨论 本次回复 还没操作")
+
+    def test_same_recipient_with_conflicting_reply_cannot_override_title(self):
+        text = _analysis_text(title="回复@甲: 我还没有买入 //@甲:看涨",
+                              content="回复@甲: 我已经满仓买入 //@乙:很好",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(text, "本次回复 我还没有买入")
+
+    def test_non_reply_title_stance_is_preserved(self):
+        text = _analysis_text(title="我不同意这种做法", content="回复@甲:我满仓买了 //@甲:赶紧买",
+                              platform="xueqiu", max_chars=1200)
+        self.assertIn("我不同意这种做法", text)
+        self.assertNotIn("赶紧买", text)
+
+    def test_quote_only_body_cannot_hide_title_stance(self):
+        text = _analysis_text(title="我不同意这种做法", content="回复@甲: //@甲:我满仓买了",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(text, "我不同意这种做法")
+
+    def test_full_reply_preserves_head_tail_and_budget(self):
+        text = _analysis_text(title="回复@甲: 开头...", content="回复@甲:开头" + "中" * 1400 + "结尾 //@甲:外部引用",
+                              platform="xueqiu", max_chars=1200)
+        self.assertEqual(len(text), 1200)
+        self.assertTrue(text.endswith("结尾"))
+        self.assertNotIn("外部引用", text)
+
+    def test_v71_dispatch_does_not_replace_v7_or_v6(self):
+        old = _system_prompt(include_reasoning=True, prompt_version="sentiment-v7")
+        new = _system_prompt(include_reasoning=True, prompt_version="sentiment-v7.1")
+        self.assertNotEqual(old, new)
+        self.assertIn(QUOTE_ONLY_TEXT, new)
 
 
 if __name__ == "__main__":

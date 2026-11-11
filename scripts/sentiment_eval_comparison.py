@@ -1,4 +1,4 @@
-"""Write a static, paired v6/v7 review without treating differences as errors."""
+"""Write a static review of two variants without treating differences as errors."""
 from __future__ import annotations
 
 from collections import Counter
@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 VARIANTS = ("baseline", "prompt")
+VARIANT_LABELS = {"baseline": "v6基线", "prompt": "v7", "refined": "v7.1"}
 FIELDS = (
     "content_type", "sentiment_score", "sentiment_label", "emotion_tags",
     "intent", "position_status", "market_outlook",
@@ -61,14 +62,16 @@ def _equal(first, second, field):
     return first == second
 
 
-def _side(row):
+def _side(row, variant):
     if row is None:
-        return {"status": "missing", "decision": None, "errors": [], "analysis_text": None}
+        return {"variant": variant, "status": "missing", "decision": None,
+                "errors": [], "analysis_text": None}
     attempts = row.get("attempts") or []
     errors = [attempt.get("error") for attempt in attempts if attempt.get("error")]
     if row.get("error"):
         errors.append(row["error"])
     return {
+        "variant": variant,
         "status": "ok" if _valid(row) else "failed",
         "original_status": row.get("status"), "decision": row.get("decision"),
         "analysis_text": row.get("analysis_text"), "seconds": row.get("seconds"),
@@ -76,11 +79,12 @@ def _side(row):
     }
 
 
-def _build_pairs(samples, rows):
+def _build_pairs(samples, rows, left_variant, right_variant):
+    variants = (left_variant, right_variant)
     sources = {str(sample["id"]): sample for sample in samples}
     keyed = {}
     for row in rows:
-        if row.get("variant") not in VARIANTS:
+        if row.get("variant") not in variants:
             continue
         key = (str(row["id"]), row.get("seed"), row.get("repeat"))
         sides = keyed.setdefault(key, {})
@@ -91,7 +95,7 @@ def _build_pairs(samples, rows):
     pairs = []
     for (identifier, seed, repeat), sides in keyed.items():
         source = sources.get(identifier, {})
-        first, second = sides.get("baseline"), sides.get("prompt")
+        first, second = sides.get(left_variant), sides.get(right_variant)
         both_valid = _valid(first) and _valid(second)
         changes, highlights = [], []
         gap = None
@@ -115,7 +119,7 @@ def _build_pairs(samples, rows):
                 highlights.append("intent")
         missing = first is None or second is None
         failed = any(row is not None and not _valid(row) for row in (first, second))
-        pairs.append({
+        pair = {
             "id": identifier, "seed": seed, "repeat": repeat,
             "source": {name: source.get(name, "") for name in ("title", "content", "platform", "sector", "split")},
             "both_valid": both_valid, "missing": missing, "failed": failed,
@@ -125,8 +129,12 @@ def _build_pairs(samples, rows):
             "highlight_fields": highlights,
             "input_mismatch": bool(first is not None and second is not None
                                    and first.get("analysis_text") != second.get("analysis_text")),
-            "baseline": _side(first), "prompt": _side(second),
-        })
+            "left": _side(first, left_variant), "right": _side(second, right_variant),
+        }
+        if variants == VARIANTS:
+            # Preserve the original report's keys only when their names are true.
+            pair.update(baseline=pair["left"], prompt=pair["right"])
+        pairs.append(pair)
     return pairs
 
 
@@ -156,8 +164,8 @@ def _status(side):
     return {"ok": "输出有效", "missing": "缺少结果", "failed": "请求或校验失败"}[side["status"]]
 
 
-def _render_pair(pair, index):
-    a, b = pair["baseline"], pair["prompt"]
+def _render_pair(pair, index, left_label, right_label):
+    a, b = pair["left"], pair["right"]
     if pair["both_valid"]:
         state = "核心字段相同" if pair["core_equal"] else "核心字段不同"
     else:
@@ -180,12 +188,12 @@ def _render_pair(pair, index):
     if a["analysis_text"] is not None and a["analysis_text"] == b["analysis_text"]:
         content.append(f'<pre>{_escape(a["analysis_text"])}</pre>')
     else:
-        for name, side in (("v6", a), ("v7", b)):
-            content.append(f'<p>{name}</p><pre>{_escape(side["analysis_text"]) if side["analysis_text"] is not None else "未保存输入"}</pre>')
+        for name, side in ((left_label, a), (right_label, b)):
+            content.append(f'<p>{_escape(name)}</p><pre>{_escape(side["analysis_text"]) if side["analysis_text"] is not None else "未保存输入"}</pre>')
     content.append('<details><summary>查看原始标题和正文（未按模型输入长度裁剪）</summary>'
                    f'<h3>原始标题</h3><pre>{_escape(pair["source"]["title"])}</pre>'
                    f'<h3>原始正文</h3><pre>{_escape(pair["source"]["content"])}</pre></details>')
-    content.append('<table><thead><tr><th>字段</th><th>v6 基线</th><th>v7 候选</th></tr></thead><tbody>'
+    content.append(f'<table><thead><tr><th>字段</th><th>{_escape(left_label)}</th><th>{_escape(right_label)}</th></tr></thead><tbody>'
                    f'<tr><th>状态</th><td>{_status(a)}</td><td>{_status(b)}</td></tr>')
     for field in (*FIELDS, "reasoning"):
         changed = field in pair["changed_fields"] or (field == "reasoning" and pair["reasoning_changed"])
@@ -197,23 +205,35 @@ def _render_pair(pair, index):
     content.append('</tbody></table>')
     if pair["raw_score_changed"] and "sentiment_score" not in pair["changed_fields"]:
         content.append('<p>两组原始分数不同，但资讯不参与情绪比较，有效分数均按 0 处理。</p>')
-    for name, side in (("v6", a), ("v7", b)):
+    for name, side in ((left_label, a), (right_label, b)):
         if side["errors"]:
-            content.append(f'<details><summary>{name} 请求尝试中的错误</summary><pre>{_escape(chr(10).join(map(str, side["errors"])))}</pre></details>')
+            content.append(f'<details><summary>{_escape(name)} 请求尝试中的错误</summary><pre>{_escape(chr(10).join(map(str, side["errors"])))}</pre></details>')
     content.append('</article>')
     return "\n".join(content)
 
 
-def write_paired_comparison(directory: Path, samples: list[dict], rows: list[dict]) -> dict:
+def write_paired_comparison(directory: Path, samples: list[dict], rows: list[dict], *,
+                            left_variant: str = "baseline", right_variant: str = "prompt",
+                            left_label=None, right_label=None) -> dict:
     """Write comparison.json/html and return their comparison summary.
 
     Pairing uses id/seed/repeat, never sample order. Core equality excludes prose
     reasoning; differences in reasons and raw nonparticipating scores remain shown.
     Failed and missing results are retained. Their counts may overlap for a pair.
+    Rows from other variants are ignored. Every pair has left/right side keys;
+    the default pair additionally retains the historical baseline/prompt aliases.
     """
-    pairs = _build_pairs(samples, rows)
+    if (not isinstance(left_variant, str) or not left_variant.strip()
+            or not isinstance(right_variant, str) or not right_variant.strip()
+            or left_variant == right_variant):
+        raise ValueError("对照必须选择两个不同且非空的 variant")
+    left_label = VARIANT_LABELS.get(left_variant, left_variant) if left_label is None else str(left_label)
+    right_label = VARIANT_LABELS.get(right_variant, right_variant) if right_label is None else str(right_label)
+    pairs = _build_pairs(samples, rows, left_variant, right_variant)
     difference_counts = Counter(field for pair in pairs for field in pair["changed_fields"])
     summary = {
+        "left_variant": left_variant, "right_variant": right_variant,
+        "left_label": left_label, "right_label": right_label,
         "available": bool(pairs), "total_pairs": len(pairs),
         "both_valid": sum(pair["both_valid"] for pair in pairs),
         "same": sum(pair["core_equal"] is True for pair in pairs),
@@ -227,7 +247,7 @@ def write_paired_comparison(directory: Path, samples: list[dict], rows: list[dic
         "field_differences": dict(difference_counts),
         "note": ("按样本ID、种子和重复次序配对。核心字段一致性不包含理由文字；"
                  "失败和缺失可能重叠。差异不等于错误，本报告不计算准确率。"
-                 if pairs else "没有 baseline 或 prompt 结果，无法生成 v6/v7 配对比较。"),
+                 if pairs else f"没有 {left_variant} 或 {right_variant} 结果，无法生成 {left_label} / {right_label} 配对比较。"),
     }
     body = ["<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -239,7 +259,8 @@ def write_paired_comparison(directory: Path, samples: list[dict], rows: list[dic
             '.changed{background:#fff7dd}.notice{background:#ffedd5;padding:10px}.meta{color:#475569;font-size:14px}summary{cursor:pointer}details{margin:12px 0}'
             '@media(max-width:600px){body{padding:0 10px}article{padding:12px}td,th{padding:6px;font-size:14px}}',
             '</style></head><body><h1>本地情绪模型逐条对照</h1>',
-            '<p>v6 基线与 v7 候选使用同一模型。黄色行表示输出发生变化，不代表哪组错误。'
+            f'<p>对照版本：{_escape(left_label)}（{_escape(left_variant)}）与 '
+            f'{_escape(right_label)}（{_escape(right_variant)}）。黄色行表示输出发生变化，不代表哪组错误。'
             '没有人工确认的标签，就不能计算准确率或判断哪组更准。理由不同另行展示，不计入核心字段一致性。</p>',
             '<p>情绪分数按 -100 至 +100 展示；资讯的“不参与”在分差比较时按 0。'
             '30 分差、相反涨跌预期或买卖方向仅作为复核重点，不触发生产云端调用。'
@@ -249,7 +270,7 @@ def write_paired_comparison(directory: Path, samples: list[dict], rows: list[dic
             f'核心不同 {summary["different"]}；至少一方失败 {summary["failed"]}；至少一方缺失 {summary["missing"]}；'
             f'重点差异 {summary["highlighted"]}。</p>',
     ]
-    body.extend(_render_pair(pair, index) for index, pair in enumerate(pairs, 1))
+    body.extend(_render_pair(pair, index, left_label, right_label) for index, pair in enumerate(pairs, 1))
     body.append('</body></html>')
     directory = Path(directory)
     targets = [directory / "comparison.json", directory / "comparison.html"]

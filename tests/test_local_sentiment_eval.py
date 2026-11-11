@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.evaluate_local_sentiment import (
-    evaluate_one, load_samples, local_base_url, parser, run, summarize,
+    ANALYSIS_TEXT_VERSION, VARIANTS, digest, evaluate_one, load_samples, local_base_url, parser, run, summarize,
 )
 
 
@@ -287,6 +287,7 @@ class LocalSentimentEvalTests(unittest.TestCase):
         with patch("local_llm_runtime.Path.is_file", return_value=True), \
                 patch("local_llm_runtime.shutil.which", return_value="/mock/llama-server"), \
                 patch("local_llm_runtime.LocalLlmRuntime._require_free_port", side_effect=RuntimeError("port occupied")), \
+                patch("local_llm_runtime.LocalLlmRuntime._wait_ready", side_effect=RuntimeError("port occupied")), \
                 patch("local_llm_runtime.subprocess.Popen") as popen, patch("local_llm_runtime.os.killpg") as killpg:
             with self.assertRaisesRegex(RuntimeError, "port occupied"):
                 run(self.args("--start-local-model"), Mock())
@@ -358,6 +359,82 @@ class LocalSentimentEvalTests(unittest.TestCase):
                         run(parser().parse_args(["--mysql", *extra]), Mock())
                     sampler.assert_not_called()
             self.assertEqual(archive.read_bytes(), b"keep")
+
+    def test_dataset_hash_mismatch_stops_before_runtime_and_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "samples.jsonl"
+            source.write_text(json.dumps(sample()) + "\n")
+            target = Path(tmp) / "run"
+            args = parser().parse_args(["--input", str(source), "--expect-dataset-sha256", "0" * 64,
+                                       "--start-local-model", "--output-dir", str(target)])
+            session = Mock()
+            with patch("scripts.evaluate_local_sentiment.LocalLlmRuntime") as runtime:
+                with self.assertRaisesRegex(ValueError, "样本摘要不匹配"):
+                    run(args, session)
+                runtime.assert_not_called()
+            session.get.assert_not_called()
+            session.post.assert_not_called()
+            self.assertFalse(target.exists())
+
+    def test_dataset_hash_argument_rejects_non_sha256(self):
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            self.args("--expect-dataset-sha256", "not-a-hash")
+
+    def test_refined_pair_preserves_frozen_samples_and_shares_corrected_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "samples.jsonl"
+            samples = [dict(sample(), analysis_text="旧标题片段"),
+                       dict(sample(), id="b", title="原始完整标题", analysis_text="修正后：原始完整标题")]
+            original_bytes = "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in samples).encode()
+            source.write_bytes(original_bytes)
+            target = Path(tmp) / "run"
+            expected_hash = digest(samples)
+            args = parser().parse_args(["--input", str(source), "--expect-dataset-sha256", expected_hash,
+                                       "--base-url", "http://100.83.225.31:8080", "--variant", "prompt",
+                                       "--variant", "refined", "--output-dir", str(target)])
+            session = Mock()
+            session.get.return_value = response({"data": [{"id": "remote-model"}]})
+            session.post.return_value = completion(decision())
+            with patch("scripts.evaluate_local_sentiment._analysis_text", side_effect=lambda **kw: "修正后：" + kw["title"]) as prepare, \
+                    patch("scripts.evaluate_local_sentiment.LocalLlmRuntime") as runtime, patch("builtins.print"):
+                report, directory = run(args, session)
+            prepare.assert_called()
+            self.assertEqual(prepare.call_count, 2)
+            runtime.assert_not_called()
+            self.assertEqual(source.read_bytes(), original_bytes)
+            frozen = [json.loads(line) for line in (directory / "samples.jsonl").read_text().splitlines()]
+            self.assertEqual(frozen, samples)
+            self.assertEqual(digest(frozen), expected_hash)
+            metadata = json.loads((directory / "metadata.json").read_text())
+            self.assertEqual(metadata["dataset_sha256"], expected_hash)
+            self.assertEqual(metadata["expected_dataset_sha256"], expected_hash)
+            self.assertEqual(metadata["preprocessing_version"], ANALYSIS_TEXT_VERSION)
+            self.assertEqual(metadata["input_mode"], "reprocess_title_and_content")
+            self.assertEqual(metadata["historical_input_comparison"], {
+                "available_count": 2, "changed_count": 1, "unchanged_count": 1, "missing_count": 0, "changed_ids": ["a"]})
+            bodies = [call.kwargs["json"] for call in session.post.call_args_list]
+            texts = [json.loads(body["messages"][1]["content"])["analysis_text"] for body in bodies]
+            self.assertEqual(texts[:2], texts[2:])
+            results = [json.loads(line) for line in (directory / "results.jsonl").read_text().splitlines()]
+            self.assertEqual([r["historical_analysis_text"] for r in results],
+                             ["旧标题片段", "修正后：原始完整标题"] * 2)
+            self.assertEqual([r["input_changed_from_history"] for r in results], [True, False] * 2)
+            self.assertEqual(report["comparison"]["left_variant"], "prompt")
+            self.assertEqual(report["comparison"]["right_variant"], "refined")
+            self.assertEqual(report["comparison"]["input_mismatch"], 0)
+            self.assertEqual(set(report["variants"]), {"prompt", "refined"})
+
+    def test_refined_does_not_change_existing_default_variants(self):
+        self.assertEqual(VARIANTS["refined"], ("sentiment-v7.1", {"temperature": 0.1}))
+        self.assertEqual(VARIANTS["prompt"], ("sentiment-v7", {"temperature": 0.1}))
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Mock()
+            session.get.return_value = response({"data": [{"id": "local"}]})
+            session.post.return_value = completion(decision())
+            args = parser().parse_args(["--smoke", "--limit", "1", "--output-dir", str(Path(tmp) / "run")])
+            with patch("builtins.print"):
+                report, _ = run(args, session)
+            self.assertEqual(set(report["variants"]), {"baseline", "prompt"})
 
 
 if __name__ == "__main__":

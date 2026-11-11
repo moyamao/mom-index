@@ -12,11 +12,13 @@ import requests
 from runtime_config import ini_get, ini_get_bool, ini_get_float, ini_get_int, ini_get_optional
 from analyzer.model_privacy import request_options
 from analyzer.llm_contract import model_response_format, validate_model_payload
-from analyzer.sentiment_prompts import sentiment_v7_prompt
+from analyzer.sentiment_prompts import sentiment_v7_prompt, sentiment_v71_prompt
 
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4.1-mini"
+ANALYSIS_TEXT_VERSION = "author-reply-v2"
+QUOTE_ONLY_TEXT = "【仅转发/引用，无作者新增表态】"
 
 
 @dataclass
@@ -241,7 +243,7 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
     payload = {
         "model": _model(),
         **generation_options(),
-        "max_tokens": max(768 if prompt_version == "sentiment-v7" else 384, _max_output_tokens()),
+        "max_tokens": max(768 if prompt_version in {"sentiment-v7", "sentiment-v7.1"} else 384, _max_output_tokens()),
         "chat_template_kwargs": {"enable_thinking": False},
         "response_format": _response_format(),
         "messages": [
@@ -293,12 +295,49 @@ def analyze_sentiment_with_llm(*, title: str, content: str, sector: str, platfor
 
 def _analysis_text(*, title: str, content: str, platform: str, max_chars: int) -> str:
     if platform == "xueqiu":
-        match = re.match(r"^\s*回复\s*@[^:：\s]+\s*[:：]\s*(.*)", title or "", re.S)
-        if match:
-            reply = re.split(r"\s*//\s*@", match.group(1), maxsplit=1)[0].strip()
-            if reply:
-                return _truncate_text(title="本次回复", content=reply, max_chars=max_chars)
+        title_reply = _reply_parts(title)
+        body_reply = _reply_parts(content)
+        reply = None
+        if title_reply is not None:
+            reply = title_reply[1]
+            # Require both recipient and author text to agree. The same recipient
+            # alone can also occur in a different quoted reply.
+            if (body_reply is not None and body_reply[0] == title_reply[0]
+                    and _reply_body_matches(reply, body_reply[1])):
+                reply = body_reply[1]
+        elif body_reply is not None:
+            # An independent title can contain the author's own stance; retain
+            # it while excluding the quoted portion of the body.
+            if title.strip():
+                own_body = f"本次回复 {body_reply[1]}" if body_reply[1] else ""
+                return _truncate_text(title=title, content=own_body, max_chars=max_chars)
+            reply = body_reply[1]
+        if reply is not None:
+            if not reply:
+                return QUOTE_ONLY_TEXT[:max_chars]
+            return _truncate_text(title="本次回复", content=reply, max_chars=max_chars)
     return _truncate_text(title=title, content=content, max_chars=max_chars)
+
+
+def _reply_parts(text: str):
+    match = re.match(r"^\s*回复\s*@([^:：\n]+?)\s*[:：]\s*(.*)", text or "", re.S)
+    if match is None:
+        return None
+    recipient = re.sub(r"\s+", "", match.group(1))
+    own_text = re.split(r"\s*//\s*@", match.group(2), maxsplit=1)[0].strip()
+    return recipient, own_text
+
+
+def _reply_body_matches(title_text: str, body_text: str) -> bool:
+    title_text = re.sub(r"\s*[-–—]\s*雪球\s*$", "", title_text).strip()
+    truncated = bool(re.search(r"(?:\.{3,}|…+)\s*$", title_text))
+    if truncated:
+        title_text = re.sub(r"(?:\.{3,}|…+)\s*$", "", title_text)
+    title_text = re.sub(r"\s+", "", title_text)
+    body_text = re.sub(r"\s+", "", body_text)
+    if truncated and title_text:
+        return body_text.startswith(title_text)
+    return title_text == body_text
 
 
 def _truncate_text(*, title: str, content: str, max_chars: int) -> str:
@@ -315,7 +354,10 @@ def _truncate_text(*, title: str, content: str, max_chars: int) -> str:
 
 
 def _system_prompt(*, include_reasoning: bool, prompt_version: Optional[str] = None) -> str:
-    if (prompt_version or llm_prompt_version()) == "sentiment-v7":
+    version = prompt_version or llm_prompt_version()
+    if version == "sentiment-v7.1":
+        return sentiment_v71_prompt(include_reasoning=include_reasoning)
+    if version == "sentiment-v7":
         return sentiment_v7_prompt(include_reasoning=include_reasoning)
     reasoning_line = (
         '"reasoning": "一句话说明依据"'

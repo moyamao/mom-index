@@ -17,10 +17,10 @@ def record(identifier, variant, *, seed=42, repeat=1, status="ok", **changes):
 
 
 class SentimentPairedComparisonTests(unittest.TestCase):
-    def report(self, rows, samples=None):
+    def report(self, rows, samples=None, **options):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            summary = write_paired_comparison(directory, samples or [], rows)
+            summary = write_paired_comparison(directory, samples or [], rows, **options)
             saved = json.loads((directory / "comparison.json").read_text())
             page = (directory / "comparison.html").read_text()
         return summary, saved["pairs"], page
@@ -33,6 +33,10 @@ class SentimentPairedComparisonTests(unittest.TestCase):
         self.assertEqual(summary["different"], 0)
         self.assertTrue(pairs[0]["reasoning_changed"])
         self.assertIn("不同理由", page)
+        self.assertEqual(pairs[0]["baseline"], pairs[0]["left"])
+        self.assertEqual(pairs[0]["prompt"], pairs[0]["right"])
+        self.assertEqual(summary["left_variant"], "baseline")
+        self.assertEqual(summary["right_variant"], "prompt")
 
     def test_all_core_differences_visible_and_large_oppositions_highlighted(self):
         rows = [record("a", "baseline", sentiment_score=-0.2, intent="buy", market_outlook="bullish"),
@@ -99,6 +103,69 @@ class SentimentPairedComparisonTests(unittest.TestCase):
         self.assertEqual(pairs, [])
         self.assertIn("无法生成", summary["note"])
         self.assertIn("无法生成", page)
+
+    def test_v7_refined_comparison_ignores_baseline_and_labels_selected_pair(self):
+        rows = [record("a", "baseline", sentiment_score=-0.8),
+                record("a", "prompt"), record("a", "refined", sentiment_score=0.3),
+                record("old-only", "baseline")]
+        summary, pairs, page = self.report(rows, left_variant="prompt", right_variant="refined")
+        self.assertEqual(summary["total_pairs"], 1)
+        self.assertEqual(summary["both_valid"], 1)
+        self.assertEqual(summary["different"], 1)
+        self.assertEqual(summary["left_variant"], "prompt")
+        self.assertEqual(summary["right_variant"], "refined")
+        self.assertEqual(summary["left_label"], "v7")
+        self.assertEqual(summary["right_label"], "v7.1")
+        self.assertEqual(pairs[0]["effective_score_gap_points"], 30)
+        self.assertEqual(pairs[0]["left"]["variant"], "prompt")
+        self.assertEqual(pairs[0]["right"]["variant"], "refined")
+        self.assertNotIn("baseline", pairs[0])
+        self.assertNotIn("prompt", pairs[0])
+        self.assertIn("<th>v7</th><th>v7.1</th>", page)
+        self.assertNotIn("v6", page)
+        self.assertNotIn("v6", json.dumps(summary, ensure_ascii=False))
+
+    def test_selected_pair_retains_failed_missing_without_cross_seed_or_repeat(self):
+        rows = [record("a", "prompt", seed=42), record("a", "refined", seed=43),
+                record("a", "baseline", seed=42),
+                record("b", "prompt", repeat=1), record("b", "refined", repeat=2),
+                record("c", "prompt"), record("c", "refined", status="failed")]
+        summary, pairs, page = self.report(rows, left_variant="prompt", right_variant="refined")
+        self.assertEqual(summary["total_pairs"], 5)
+        self.assertEqual(summary["both_valid"], 0)
+        self.assertEqual(summary["missing"], 4)
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(summary["incomplete"], 5)
+        self.assertEqual(pairs[0]["right"]["status"], "missing")
+        self.assertEqual(pairs[0]["right"]["variant"], "refined")
+        self.assertIn("v7.1 请求尝试中的错误", page)
+
+    def test_selected_pair_input_mismatch_and_custom_labels_are_visible_and_escaped(self):
+        rows = [record("a", "prompt"), record("a", "refined", status="failed")]
+        rows[1]["analysis_text"] = "不同输入"
+        summary, pairs, page = self.report(
+            rows, left_variant="prompt", right_variant="refined",
+            left_label="<img src=x>", right_label="<script>x</script>")
+        self.assertEqual(summary["input_mismatch"], 1)
+        self.assertTrue(pairs[0]["input_mismatch"])
+        self.assertIn("两组实际输入不同", page)
+        self.assertNotIn("<img", page)
+        self.assertNotIn("<script", page)
+        self.assertIn("&lt;img src=x&gt;", page)
+        self.assertIn("&lt;script&gt;x&lt;/script&gt; 请求尝试中的错误", page)
+
+    def test_unavailable_message_names_selected_variants_only(self):
+        summary, pairs, page = self.report(
+            [record("a", "baseline")], left_variant="prompt", right_variant="refined")
+        self.assertFalse(summary["available"])
+        self.assertEqual(pairs, [])
+        self.assertIn("prompt 或 refined", summary["note"])
+        self.assertIn("v7 / v7.1", summary["note"])
+        self.assertNotIn("v6", page)
+
+    def test_identical_variant_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "两个不同"):
+            self.report([record("a", "prompt")], left_variant="prompt", right_variant="prompt")
 
     def test_duplicate_pair_does_not_silently_overwrite(self):
         with self.assertRaisesRegex(ValueError, "重复"):

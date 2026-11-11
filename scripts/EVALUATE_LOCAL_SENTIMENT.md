@@ -2,7 +2,35 @@
 
 从项目目录执行。工具从输入文件或 MySQL 只读抽样，顺序调用本地模型，不调用百炼、不写入 MySQL，也不改变生产默认提示词。默认连接已启动的模型；加 `--start-local-model` 可按需启动本机模型。生成请求前先检查 `/v1/models`；不可达、模型不匹配或地址属于公网时停止。使用远程 Mac mini 时填写 Tailscale IP；不要填写公网云端地址。
 
-v7 提示词需主动选择，暂不自动替换生产 v6；严格输出校验、短句与完整标题处理、重试保留原输入等修复在部署后也适用于 v6。已有入库记录不会被重写；历史终态 `llm_failed` 即使后来修复了原因，仍需显式重新分析。
+v7 和 v7.1 提示词需主动选择，暂不自动替换生产 v6；严格输出校验、短句与完整标题处理、重试保留原输入等修复在部署后也适用于 v6。已有入库记录不会被重写；历史终态 `llm_failed` 即使后来修复了原因，仍需显式重新分析。
+
+## 两台机器运行：Mac mini 提供 API，MacBook 复跑同一批100条
+
+Mac mini 使用自身 `conf/config.ini` 的 `[local_llm]` 模型路径和服务配置，在一个终端持续运行：
+
+```bash
+cd /Users/mhy/python/mom-index
+caffeinate -i .venv/bin/python -u scripts/serve_local_llm.py --host 0.0.0.0
+```
+
+保持此终端运行（Ctrl+C 停止）；`caffeinate -i` 防止空闲休眠，不设置开机自启。定时分析任务会核对并复用同端口、同模型的常驻服务，结束时不关闭它；正在运行的按需启动任务持有端口任务锁，其他按需任务会停止并提示等待，避免复用即将被关闭的临时服务。
+
+服务就绪后，在 MacBook 项目中读取已保留的那100条样本，通过 Tailscale 调用 Mac mini：
+
+```bash
+cd /Users/mhy/python/mom-index
+caffeinate -i /usr/bin/python3 -u scripts/evaluate_local_sentiment.py \
+  --input outputs/sentiment-eval/20261111T082435Z-38a13ef7/samples.jsonl \
+  --expect-dataset-sha256 225692dac0f2f9982ab0f430488526ba841796a2c0311f8f66a9e26a5bc2051f \
+  --base-url http://100.83.225.31:8080 \
+  --variant prompt --variant refined
+```
+
+这里 `prompt` 仍为原 v7，`refined` 为候选 v7.1，两组温度均为0.1。不加 `--start-local-model`；评测不会启停 Mac mini 的长期服务。结果直接生成在 MacBook 的 `outputs/sentiment-eval/`，可以本机查看中文 HTML，不需要从 Mac mini 传回压缩包。
+
+`--expect-dataset-sha256` 校验选定样本的逻辑 JSON 摘要，匹配原评测的 `metadata.json.dataset_sha256`；误换文件、改动源帖子或只选择部分样本时，脚本会在模型请求之前停止。需要核对服务模型时，可额外传 `--model`，填写 `/v1/models` 返回的完整模型标识；不匹配则停止。
+
+本轮仍是同一批源帖子，但会用修复后的 `author-reply-v2` 规则重新处理标题和正文：优先完整本次回复，隔离纯引用。两组共用同一次处理的相同输入，不是逐字重放上一轮输入。冻结文件中的历史 `analysis_text` 不会被覆盖；新报告记录旧输入、当前输入和变化数量，便于区分预处理修复与提示词差异。没有人工 gold，结果仍不代表准确率。
 
 ## Mac mini 独立运行：启动模型、评测、关闭
 
@@ -14,7 +42,7 @@ cd /Users/mhy/python/mom-index
   --start-local-model --smoke --variant baseline --variant prompt
 ```
 
-该选项只在本次调用中启用启动功能，不修改配置；正常完成、部分样本失败、其他异常或 Ctrl+C 中断都会关闭本次启动的模型。端口若已被其他服务占用则停止，不会关闭已有进程。开始前先校验输入和输出目录，避免无效任务加载模型。
+该选项只在本次调用中启用启动功能，不修改配置；正常完成、部分样本失败、其他异常或 Ctrl+C 中断都会关闭本次启动的模型。同一模型的既有服务可复用，且不会被评测关闭；其他模型或无法确认身份的服务占用端口时会停止。开始前先校验输入和输出目录，避免无效任务加载模型。
 
 自动启动时连接配置端口的 `127.0.0.1`，覆盖继承的 `QWEN_BASE_URL`，并使用实际发现的模型身份；显式指定的冲突 `--base-url` 或 `--model` 会报错。请求超时默认使用 `[local_llm].request_timeout_seconds`，可用 `--timeout` 覆盖。未加启动选项时仍需自行启动模型，请求超时默认120秒。
 
@@ -83,10 +111,11 @@ cd /Users/mhy/python/mom-index
 | --- | --- | --- |
 | baseline | sentiment-v6 | temperature=0.1，其余使用服务默认值 |
 | prompt | sentiment-v7 | temperature=0.1，其余使用服务默认值 |
+| refined | sentiment-v7.1 | temperature=0.1，其余使用服务默认值 |
 | greedy | sentiment-v7 | temperature=0，其余使用服务默认值 |
 | official | sentiment-v7 | temperature=0.7, top_p=0.8, top_k=20, min_p=0, repeat_penalty=1 |
 
-所有组使用相同输入、严格 JSON 契约、默认768输出token、非思考模式。baseline 是 v6 提示词控制组，不是对历史生产流程的逐字重放。先比 baseline/prompt；选好提示词后再比 prompt/greedy/official。official 仅是 Qwen3 非思考模式的参考采样组，不是所有新模型的通用最佳参数，实际效果仍须人工标注集 A/B 验证。它同时改变多个采样参数，不能据此将差异单独归因于温度。每次比较期间保持同一模型和服务启动参数。
+所有组使用相同输入、严格 JSON 契约、默认768输出token、非思考模式。未指定 `--variant` 时仍默认 baseline/prompt；v7.1 对照需显式指定 prompt/refined。恰好指定两组时，报告比较这两组；三组及以上仍按 baseline/prompt 配对，其余组保留独立统计。baseline 是 v6 提示词控制组，不是对历史生产流程的逐字重放。official 仅是 Qwen3 非思考模式的参考采样组，不是所有新模型的通用最佳参数，实际效果仍须人工标注集 A/B 验证。它同时改变多个采样参数，不能据此将差异单独归因于温度。每次比较期间保持同一模型和服务启动参数。
 
 `--seeds` 指定采样种子，范围为 `-1` 到 `4294967295`，重复种子自动去重；`-1` 表示随机种子，不适用于固定种子复现。`--repeats` 指定每个种子的重复次数。固定种子有助复现，不保证语义正确。文件输入可用 `--limit 10` 做小批检查，MySQL模式则使用 `--sample-size 10`；`--max-chars 1200`、`--max-tokens 768`、`--timeout 120` 控制预算。失败自动重试两次，三次请求的文本和参数完全相同。
 
@@ -94,9 +123,9 @@ cd /Users/mhy/python/mom-index
 
 每次在 `outputs/sentiment-eval/` 创建独立目录，也可通过 `--output-dir` 指定尚不存在的目录。已有目录会被拒绝，避免覆盖之前的对照结果。
 
-- `metadata.json`：输入摘要、模型、提示词版本、生成配置、种子、数量与运行状态。
+- `metadata.json`：源样本及实际输入摘要、`input_mode`、`preprocessing_version`、历史输入变化数量和ID、模型、提示词版本、生成配置、种子、数量与运行状态。
 - `samples.jsonl`、`sampling.json`：MySQL 模式在模型启动前保存的冻结样本和抽样记录，可用于审计与复跑。
-- `results.jsonl`：每条完成后立即刷新到磁盘，保存实际输入、输入/提示词/请求哈希、模型返回、每次尝试的错误、截断原因、token统计与耗时。中断后已完成条目仍在，状态保持 running。
+- `results.jsonl`：每条完成后立即刷新到磁盘，保存实际输入、历史输入（若源文件提供）、输入是否变化、预处理版本、输入/提示词/请求哈希、模型返回、每次尝试的错误、截断原因、token统计与耗时。中断后已完成条目仍在，状态保持 running。
 - `summary.json`：各组有效输出率、字段准确率、情绪宏F1、情绪分差、重复一致性与耗时。完整跑完但有失败时退出码为2，仍保存报告。
 - `comparison.json`、`comparison.html`：按同一条样本配对展示各组输出，中文页面便于检查所有差异和失败；它是人工复核材料，不是自动正确性判定。
 
