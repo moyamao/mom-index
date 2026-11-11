@@ -17,6 +17,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -28,6 +29,7 @@ from analyzer.llm_sentiment import _analysis_text, _parse_json_payload, _system_
 from analyzer.model_privacy import request_options
 from local_llm_runtime import LocalLlmRuntime
 from runtime_config import ini_get_int
+from scripts.sentiment_eval_comparison import write_paired_comparison
 
 
 VARIANTS = {
@@ -124,6 +126,10 @@ def load_samples(path=None, smoke=False, split="all", limit=None):
         rows = json.loads(text) if text.lstrip().startswith("[") else [
             json.loads(line) for line in text.splitlines() if line.strip()
         ]
+    return validate_samples(rows, split, limit)
+
+
+def validate_samples(rows, split="all", limit=None):
     if not isinstance(rows, list):
         raise ValueError("输入必须是 JSON 数组或逐行 JSON 对象")
     seen = set()
@@ -329,19 +335,61 @@ def summarize(rows):
     return result
 
 
-def run(args, session=None):
-    samples, selection = load_samples(args.input, args.smoke, args.split, args.limit)
-    variants = list(dict.fromkeys(args.variant or ["baseline", "prompt"]))
-    seeds = list(dict.fromkeys(args.seeds))
-    directory = Path(args.output_dir) if args.output_dir else ROOT / "outputs" / "sentiment-eval" / (
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8])
+def check_output_directory(directory):
     if directory.exists() or directory.is_symlink():
         raise FileExistsError(f"评测目录已存在，为避免覆盖请换一个目录：{directory}")
+    archive = directory.parent / (directory.name + ".zip")
+    if archive.exists() or archive.is_symlink():
+        raise FileExistsError(f"评测压缩包已存在，为避免覆盖请换一个目录：{archive}")
     parent = directory.parent
     while not parent.exists() and not parent.is_symlink():
         parent = parent.parent
     if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
         raise OSError(f"评测目录的上级目录不可写：{parent}")
+
+
+def freeze_samples(directory, samples, sampling=None):
+    with (directory / "samples.jsonl").open("x", encoding="utf-8") as out:
+        for sample in samples:
+            out.write(json.dumps(sample, ensure_ascii=False) + "\n")
+    if sampling is not None:
+        with (directory / "sampling.json").open("x", encoding="utf-8") as out:
+            json.dump({**sampling, "dataset_sha256": digest(samples), "status": "frozen"},
+                      out, ensure_ascii=False, indent=2)
+
+
+def archive_results(directory):
+    archive = directory.parent / (directory.name + ".zip")
+    with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for name in ("metadata.json", "samples.jsonl", "sampling.json", "results.jsonl",
+                     "summary.json", "comparison.json", "comparison.html"):
+            path = directory / name
+            if path.is_file():
+                bundle.write(path, arcname=directory.name + "/" + name)
+    return archive
+
+
+def run(args, session=None):
+    directory = Path(args.output_dir) if args.output_dir else ROOT / "outputs" / "sentiment-eval" / (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8])
+    check_output_directory(directory)
+    if args.mysql:
+        if args.limit is not None or args.split not in {"all", "random"}:
+            raise ValueError("MySQL模式使用 --sample-size 控制数量；--split只能为all或random，不使用--limit")
+        from scripts.sentiment_mysql_sample import sample_mysql_posts
+        sampled, sampling = sample_mysql_posts(days=args.days, count=args.sample_size,
+                                               seed=args.sample_seed, max_chars=args.max_chars)
+        samples, selection = validate_samples(sampled, args.split)
+        if len(samples) != args.sample_size:
+            raise ValueError("MySQL抽样数量不符合要求，未启动模型")
+        selection["sampling"] = sampling
+        directory.mkdir(parents=True, exist_ok=False)
+        freeze_samples(directory, samples, sampling)
+        print(f"已从MySQL随机抽取并固定{len(samples)}条：{directory / 'samples.jsonl'}", flush=True)
+    else:
+        samples, selection = load_samples(args.input, args.smoke, args.split, args.limit)
+    variants = list(dict.fromkeys(args.variant or ["baseline", "prompt"]))
+    seeds = list(dict.fromkeys(args.seeds))
     owned_session = session is None
     session = session or requests.Session()
     session.trust_env = False
@@ -359,10 +407,13 @@ def run(args, session=None):
 
 def run_evaluation(args, samples, selection, variants, seeds, directory, session, base_url, expected_model):
     model = discover_model(session, base_url, expected_model, min(args.timeout, 15))
-    directory.mkdir(parents=True, exist_ok=False)
+    if not args.mysql:
+        directory.mkdir(parents=True, exist_ok=False)
+        freeze_samples(directory, samples)
     metadata = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(), "base_url": base_url, "model": model,
-        "input": str(args.input) if args.input else "synthetic smoke examples; no human gold",
+        "input": ("mysql random sample; frozen samples.jsonl; no human gold" if args.mysql else
+                  str(args.input) if args.input else "synthetic smoke examples; no human gold"),
         "dataset_sha256": digest(samples), **selection, "split": args.split,
         "variants": {name: {"prompt_version": VARIANTS[name][0], **VARIANTS[name][1]} for name in variants},
         "seeds": seeds, "repeats_per_seed": args.repeats,
@@ -385,13 +436,17 @@ def run_evaluation(args, samples, selection, variants, seeds, directory, session
                         out.flush()
                         rows.append(row)
                         print(f"[{len(rows)}/{expected}] {variant} {sample['id']} {row['status']} {row['seconds']:.2f}s", flush=True)
-    report = {"status": "complete", "expected_runs": expected, "completed_runs": len(rows), "variants": summarize(rows)}
+    comparison = write_paired_comparison(directory, samples, rows)
+    report = {"status": "complete", "expected_runs": expected, "completed_runs": len(rows),
+              "variants": summarize(rows), "comparison": comparison}
     with (directory / "summary.json").open("x", encoding="utf-8") as out:
         json.dump(report, out, ensure_ascii=False, indent=2)
     metadata["status"] = "complete"
     with (directory / "metadata.json").open("w", encoding="utf-8") as out:
         json.dump(metadata, out, ensure_ascii=False, indent=2)
+    archive = archive_results(directory)
     print(f"评测完成：{directory}；没有写入MySQL或调用云端", flush=True)
+    print(f"结果压缩包：{archive}", flush=True)
     return report, directory
 
 
@@ -400,6 +455,10 @@ def parser():
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", type=Path, help="UTF-8 JSONL或JSON数组；gold可选")
     source.add_argument("--smoke", action="store_true", help="内置3条合成短句，仅检查连通性与输出，不计算准确率")
+    source.add_argument("--mysql", action="store_true", help="从MySQL最近帖子随机抽样并固定；只读，不读取模型标签")
+    ap.add_argument("--days", type=positive_int, default=30, help="MySQL抽样的北京时间滚动天数，默认30")
+    ap.add_argument("--sample-size", type=positive_int, default=100, help="MySQL去重后随机样本数，默认100；不足即停止")
+    ap.add_argument("--sample-seed", type=seed_value, default=20261111, help="MySQL抽样种子；与模型的--seeds不同")
     ap.add_argument("--output-dir", type=Path, help="必须不存在；默认在outputs/sentiment-eval创建独立目录")
     ap.add_argument("--base-url", help="默认QWEN_BASE_URL或http://127.0.0.1:8080；自动启动时使用本机地址")
     ap.add_argument("--start-local-model", action="store_true", help="按[local_llm]配置启动本机模型；结束/异常时关闭本次启动的进程")

@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
+from contextlib import contextmanager
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.evaluate_local_sentiment import (
@@ -290,6 +292,72 @@ class LocalSentimentEvalTests(unittest.TestCase):
                 run(self.args("--start-local-model"), Mock())
         popen.assert_not_called()
         killpg.assert_not_called()
+
+    def test_mysql_freezes_before_model_start_and_reuses_identical_samples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "random-run"
+            samples = [dict(sample(), id=str(i), title=f"真实帖子{i}", split="random") for i in range(3)]
+            session = Mock()
+            session.get.return_value = response({"data": [{"id": "local"}]})
+            session.post.return_value = completion(decision())
+
+            @contextmanager
+            def runtime(args):
+                self.assertEqual(len((target / "samples.jsonl").read_text().splitlines()), 3)
+                self.assertEqual(json.loads((target / "sampling.json").read_text())["status"], "frozen")
+                yield "http://127.0.0.1:8080/v1", "local", 120
+
+            args = parser().parse_args(["--mysql", "--sample-size", "3", "--days", "30",
+                                       "--sample-seed", "11", "--start-local-model", "--output-dir", str(target)])
+            with patch("scripts.sentiment_mysql_sample.sample_mysql_posts", return_value=(samples, {"pool_count": 1000})) as sampler, \
+                    patch("scripts.evaluate_local_sentiment.evaluation_runtime", side_effect=runtime), patch("builtins.print"):
+                report, folder = run(args, session)
+            sampler.assert_called_once_with(days=30, count=3, seed=11, max_chars=1200)
+            self.assertEqual(report["completed_runs"], 6)
+            sent = [json.loads(c.kwargs["json"]["messages"][1]["content"])["analysis_text"]
+                    for c in session.post.call_args_list]
+            self.assertEqual(sent[:3], sent[3:])
+            self.assertTrue(all(v["scoring_status"] == "unscored_no_human_gold" for v in report["variants"].values()))
+            with zipfile.ZipFile(folder.parent / (folder.name + ".zip")) as archive:
+                self.assertIn(folder.name + "/samples.jsonl", archive.namelist())
+                self.assertIn(folder.name + "/sampling.json", archive.namelist())
+                self.assertIn(folder.name + "/comparison.html", archive.namelist())
+                self.assertIn(folder.name + "/summary.json", archive.namelist())
+
+    def test_mysql_preflight_failure_retains_frozen_sample_without_generating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "failed-preflight"
+            session = Mock()
+            session.get.return_value = response({}, 503)
+            args = parser().parse_args(["--mysql", "--sample-size", "1", "--output-dir", str(target)])
+            with patch("scripts.sentiment_mysql_sample.sample_mysql_posts", return_value=([sample()], {})), patch("builtins.print"):
+                with self.assertRaises(ValueError):
+                    run(args, session)
+            self.assertTrue((target / "samples.jsonl").exists())
+            session.post.assert_not_called()
+            self.assertFalse((target / "metadata.json").exists())
+            self.assertFalse((target.parent / (target.name + ".zip")).exists())
+
+    def test_mysql_short_pool_stops_before_starting_model(self):
+        with patch("scripts.sentiment_mysql_sample.sample_mysql_posts", side_effect=ValueError("不足100条")), \
+                patch("scripts.evaluate_local_sentiment.LocalLlmRuntime") as runtime:
+            session = Mock()
+            with self.assertRaisesRegex(ValueError, "不足100条"):
+                run(parser().parse_args(["--mysql", "--start-local-model"]), session)
+            runtime.assert_not_called()
+            session.get.assert_not_called()
+
+    def test_mysql_rejects_limit_and_existing_archive_before_database_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "run"
+            archive = Path(tmp) / "run.zip"
+            archive.write_bytes(b"keep")
+            for extra in (["--limit", "10"], ["--output-dir", str(target)]):
+                with self.subTest(extra=extra), patch("scripts.sentiment_mysql_sample.sample_mysql_posts") as sampler:
+                    with self.assertRaises((ValueError, FileExistsError)):
+                        run(parser().parse_args(["--mysql", *extra]), Mock())
+                    sampler.assert_not_called()
+            self.assertEqual(archive.read_bytes(), b"keep")
 
 
 if __name__ == "__main__":
